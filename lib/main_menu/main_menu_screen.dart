@@ -83,5 +83,5 @@ class MainMenuScreen extends StatelessWidget {
     );
   }
 
-  static const _gap = SizedBox(height: 10);
+  static const _gap = SizedBox(height: 20);
 }

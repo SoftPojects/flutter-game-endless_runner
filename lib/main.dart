@@ -51,6 +51,7 @@ class MyGame extends StatelessWidget {
 
             return MaterialApp.router(
               title: 'Endless Runner',
+              debugShowCheckedModeBanner: false,
               theme: flutterNesTheme().copyWith(
                 colorScheme: ColorScheme.fromSeed(
                   seedColor: palette.seed.color,
