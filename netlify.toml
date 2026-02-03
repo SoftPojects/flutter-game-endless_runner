@@ -1,0 +1,7 @@
+[build]
+  command = "./netlify-build.sh"
+  publish = "build/web"
+
+[context.production.environment]
+  # Optionally set environment variables here
+  FLUTTER_WEB_AUTO_DETECT=true
