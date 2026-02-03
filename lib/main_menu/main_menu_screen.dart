@@ -27,6 +27,7 @@ class MainMenuScreen extends StatelessWidget {
             children: [
               Image.asset(
                 'assets/images/banner.png',
+                width: 250,
                 filterQuality: FilterQuality.none,
               ),
               _gap,
