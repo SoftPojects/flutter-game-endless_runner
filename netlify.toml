@@ -1,5 +1,5 @@
 [build]
-  command = "./netlify-build.sh"
+  command = "./netlify_build_flutter.sh"
   publish = "build/web"
 
 [context.production.environment]
