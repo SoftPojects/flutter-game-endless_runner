@@ -5,6 +5,8 @@ workflows:
     instance_type: mac_mini_m2
     environment:
       flutter: stable
+      groups:
+        - A
     scripts:
       - name: Download app icon
         script: |
