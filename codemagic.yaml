@@ -1,0 +1,47 @@
+workflows:
+  android-workflow:
+    name: Android Build
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    environment:
+      flutter: stable
+    scripts:
+      - name: Download app icon
+        script: |
+          if [ -n "$APP_ICON_URL" ]; then
+            mkdir -p assets/icons
+            curl -L -o assets/icons/icon.png "$APP_ICON_URL"
+            
+            cat > flutter_launcher_icons.yaml << EOF
+          flutter_launcher_icons:
+            android: true
+            ios: false
+            image_path: "assets/icons/icon.png"
+            adaptive_icon_background: "#1a1a2e"
+            adaptive_icon_foreground: "assets/icons/icon.png"
+          EOF
+            
+            flutter pub add dev:flutter_launcher_icons
+            flutter pub get
+            dart run flutter_launcher_icons
+          fi
+
+      - name: Update app name
+        script: |
+          if [ -n "$APP_NAME" ]; then
+            sed -i "s/android:label=\"[^\"]*\"/android:label=\"$APP_NAME\"/" android/app/src/main/AndroidManifest.xml
+          fi
+
+      - name: Update package ID
+        script: |
+          if [ -n "$APP_PACKAGE_ID" ]; then
+            sed -i "s/applicationId \"[^\"]*\"/applicationId \"$APP_PACKAGE_ID\"/" android/app/build.gradle
+            sed -i "s/namespace \"[^\"]*\"/namespace \"$APP_PACKAGE_ID\"/" android/app/build.gradle
+          fi
+
+      - name: Build APK
+        script: |
+          flutter build apk --${FLUTTER_BUILD_MODE:-debug}
+
+    artifacts:
+      - build/app/outputs/flutter-apk/*.apk
