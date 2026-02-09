@@ -26,13 +26,13 @@ workflows:
       - name: Update app name
         script: |
           if [ -n "$APP_NAME" ]; then
-            sed -i "s/android:label=\"[^\"]*\"/android:label=\"$APP_NAME\"/" android/app/src/main/AndroidManifest.xml
+            sed -i '' "s/android:label=\"[^\"]*\"/android:label=\"$APP_NAME\"/" android/app/src/main/AndroidManifest.xml
           fi
       - name: Update package ID
         script: |
           if [ -n "$APP_PACKAGE_ID" ]; then
-            sed -i "s/applicationId \"[^\"]*\"/applicationId \"$APP_PACKAGE_ID\"/" android/app/build.gradle
-            sed -i "s/namespace \"[^\"]*\"/namespace \"$APP_PACKAGE_ID\"/" android/app/build.gradle
+            sed -i '' "s/applicationId \"[^\"]*\"/applicationId \"$APP_PACKAGE_ID\"/" android/app/build.gradle
+            sed -i '' "s/namespace \"[^\"]*\"/namespace \"$APP_PACKAGE_ID\"/" android/app/build.gradle
           fi
       - name: Build APK
         script: |
