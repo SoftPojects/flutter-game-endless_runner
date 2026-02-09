@@ -11,7 +11,7 @@ workflows:
           if [ -n "$APP_ICON_URL" ]; then
             mkdir -p assets/icons
             curl -L -o assets/icons/icon.png "$APP_ICON_URL"
-            cat > flutter_launcher_icons.yaml << EOF
+            cat > flutter_launcher_icons.yaml << 'EOF'
           flutter_launcher_icons:
             android: true
             ios: false
@@ -23,40 +23,26 @@ workflows:
             flutter pub get
             dart run flutter_launcher_icons
           fi
-
       - name: Update app name
         script: |
           if [ -n "$APP_NAME" ]; then
             sed -i "s/android:label=\"[^\"]*\"/android:label=\"$APP_NAME\"/" android/app/src/main/AndroidManifest.xml
           fi
-
       - name: Update package ID
         script: |
           if [ -n "$APP_PACKAGE_ID" ]; then
             sed -i "s/applicationId \"[^\"]*\"/applicationId \"$APP_PACKAGE_ID\"/" android/app/build.gradle
             sed -i "s/namespace \"[^\"]*\"/namespace \"$APP_PACKAGE_ID\"/" android/app/build.gradle
           fi
-
       - name: Build APK
-        script: flutter build apk --debug
-
-       artifacts:
+        script: |
+          flutter build apk --debug
+    artifacts:
       - build/app/outputs/flutter-apk/*.apk
-
     publishing:
       scripts:
-        - name: Notify build status
+        - name: Notify webhook
           script: |
             curl -X POST "https://snwijgxwokcxtciobleu.supabase.co/functions/v1/codemagic-webhook" \
               -H "Content-Type: application/json" \
-              -d '{
-                "buildId": "'"$CM_BUILD_ID"'",
-                "status": "'"$CM_BUILD_STEP_STATUS"'",
-                "artefacts": [],
-                "environment": {
-                  "variables": {
-                    "BUILD_ID": "'"$BUILD_ID"'",
-                    "PROJECT_ID": "'"$PROJECT_ID"'"
-                  }
-                }
-              }'
+              -d "{\"buildId\": \"$CM_BUILD_ID\", \"status\": \"$CM_BUILD_STEP_STATUS\", \"environment\": {\"variables\": {\"BUILD_ID\": \"$BUILD_ID\", \"PROJECT_ID\": \"$PROJECT_ID\"}}}"
