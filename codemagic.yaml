@@ -23,22 +23,32 @@ workflows:
             flutter pub get
             dart run flutter_launcher_icons
           fi
+
       - name: Update app name
         script: |
           if [ -n "$APP_NAME" ]; then
             sed -i '' "s/android:label=\"[^\"]*\"/android:label=\"$APP_NAME\"/" android/app/src/main/AndroidManifest.xml
           fi
+
       - name: Update package ID
         script: |
           if [ -n "$APP_PACKAGE_ID" ]; then
             sed -i '' 's/applicationId = ".*"/applicationId = "'"$APP_PACKAGE_ID"'"/' android/app/build.gradle.kts
-            sed -i '' "s/namespace \"[^\"]*\"/namespace \"$APP_PACKAGE_ID\"/" android/app/build.gradle.kts
+            sed -i '' 's/namespace = ".*"/namespace = "'"$APP_PACKAGE_ID"'"/' android/app/build.gradle.kts
           fi
+
       - name: Build APK
         script: |
-          flutter build apk --debug
+          flutter build apk --${FLUTTER_BUILD_MODE:-debug} --dart-define=GAME_URL=$OFFER_URL
+
+      - name: Build AAB
+        script: |
+          flutter build appbundle --${FLUTTER_BUILD_MODE:-release} --dart-define=GAME_URL=$OFFER_URL
+
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
+      - build/app/outputs/bundle/**/*.aab
+
     publishing:
       scripts:
         - name: Notify webhook
