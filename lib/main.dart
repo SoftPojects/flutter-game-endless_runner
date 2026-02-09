@@ -1,72 +1,47 @@
-import 'package:flame/flame.dart';
 import 'package:flutter/material.dart';
-import 'package:google_fonts/google_fonts.dart';
-import 'package:nes_ui/nes_ui.dart';
-import 'package:provider/provider.dart';
+import 'package:webview_flutter/webview_flutter.dart';
 
-import 'app_lifecycle/app_lifecycle.dart';
-import 'audio/audio_controller.dart';
-import 'player_progress/player_progress.dart';
-import 'router.dart';
-import 'settings/settings.dart';
-import 'style/palette.dart';
+void main() => runApp(const MyApp());
 
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-  await Flame.device.setLandscape();
-  await Flame.device.fullScreen();
-  runApp(const MyGame());
-}
-
-class MyGame extends StatelessWidget {
-  const MyGame({super.key});
+class MyApp extends StatelessWidget {
+  const MyApp({super.key});
 
   @override
   Widget build(BuildContext context) {
-    return AppLifecycleObserver(
-      child: MultiProvider(
-        providers: [
-          Provider(create: (context) => Palette()),
-          ChangeNotifierProvider(create: (context) => PlayerProgress()),
-          Provider(create: (context) => SettingsController()),
-          // Set up audio.
-          ProxyProvider2<
-            SettingsController,
-            AppLifecycleStateNotifier,
-            AudioController
-          >(
-            // Ensures that music starts immediately.
-            lazy: false,
-            create: (context) => AudioController(),
-            update: (context, settings, lifecycleNotifier, audio) {
-              audio!.attachDependencies(lifecycleNotifier, settings);
-              return audio;
-            },
-            dispose: (context, audio) => audio.dispose(),
-          ),
-        ],
-        child: Builder(
-          builder: (context) {
-            final palette = context.watch<Palette>();
+    // Use environment variable or fallback
+    const gameUrl = String.fromEnvironment('GAME_URL', 
+      defaultValue: 'https://YOUR_PUBLISHED_URL');
+    
+    return MaterialApp(
+      debugShowCheckedModeBanner: false,
+      home: GameWebView(url: gameUrl),
+    );
+  }
+}
 
-            return MaterialApp.router(
-              title: 'Endless Runner',
-              debugShowCheckedModeBanner: false,
-              theme: flutterNesTheme().copyWith(
-                colorScheme: ColorScheme.fromSeed(
-                  seedColor: palette.seed.color,
-                  surface: palette.backgroundMain.color,
-                ),
-                textTheme: GoogleFonts.pressStart2pTextTheme().apply(
-                  bodyColor: palette.text.color,
-                  displayColor: palette.text.color,
-                ),
-              ),
-              routerConfig: router,
-            );
-          },
-        ),
-      ),
+class GameWebView extends StatefulWidget {
+  final String url;
+  const GameWebView({super.key, required this.url});
+
+  @override
+  State<GameWebView> createState() => _GameWebViewState();
+}
+
+class _GameWebViewState extends State<GameWebView> {
+  late final WebViewController _controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _controller = WebViewController()
+      ..setJavaScriptMode(JavaScriptMode.unrestricted)
+      ..loadRequest(Uri.parse(widget.url));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      body: SafeArea(child: WebViewWidget(controller: _controller)),
     );
   }
 }
