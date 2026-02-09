@@ -40,11 +40,10 @@ workflows:
       - name: Build APK
         script: flutter build apk --debug
 
-    artifacts:
+       artifacts:
       - build/app/outputs/flutter-apk/*.apk
 
-    # THIS IS THE OUTGOING WEBHOOK:
-   publishing:
+    publishing:
       scripts:
         - name: Notify build status
           script: |
