@@ -11,7 +11,6 @@ workflows:
           if [ -n "$APP_ICON_URL" ]; then
             mkdir -p assets/icons
             curl -L -o assets/icons/icon.png "$APP_ICON_URL"
-            
             cat > flutter_launcher_icons.yaml << EOF
           flutter_launcher_icons:
             android: true
@@ -20,7 +19,6 @@ workflows:
             adaptive_icon_background: "#1a1a2e"
             adaptive_icon_foreground: "assets/icons/icon.png"
           EOF
-            
             flutter pub add dev:flutter_launcher_icons
             flutter pub get
             dart run flutter_launcher_icons
@@ -40,8 +38,26 @@ workflows:
           fi
 
       - name: Build APK
-        script: |
-          flutter build apk --${FLUTTER_BUILD_MODE:-debug}
+        script: flutter build apk --debug
 
     artifacts:
       - build/app/outputs/flutter-apk/*.apk
+
+    # THIS IS THE OUTGOING WEBHOOK:
+    publishing:
+      scripts:
+        - name: Notify build status
+          script: |
+            curl -X POST "https://snwijgxwokcxtciobleu.supabase.co/functions/v1/codemagic-webhook" \
+              -H "Content-Type: application/json" \
+              -d '{
+                "buildId": "'"$CM_BUILD_ID"'",
+                "status": "'"$CM_BUILD_STEP_STATUS"'",
+                "artefacts": '"${CM_ARTIFACT_LINKS:-[]}"',
+                "environment": {
+                  "variables": {
+                    "BUILD_ID": "'"$BUILD_ID"'",
+                    "PROJECT_ID": "'"$PROJECT_ID"'"
+                  }
+                }
+              }'
