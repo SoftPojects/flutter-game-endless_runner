@@ -31,7 +31,7 @@ workflows:
       - name: Update package ID
         script: |
           if [ -n "$APP_PACKAGE_ID" ]; then
-            sed -i '' "s/applicationId \"[^\"]*\"/applicationId \"$APP_PACKAGE_ID\"/" android/app/build.gradle
+            sed -i '' 's/applicationId = ".*"/applicationId = "'"$APP_PACKAGE_ID"'"/' android/app/build.gradle.kts
             sed -i '' "s/namespace \"[^\"]*\"/namespace \"$APP_PACKAGE_ID\"/" android/app/build.gradle
           fi
       - name: Build APK
