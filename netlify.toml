@@ -1,3 +1,0 @@
-[build]
-  command = "./netlify_build_flutter.sh"
-  publish = "build/web"
