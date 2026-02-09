@@ -32,7 +32,7 @@ workflows:
         script: |
           if [ -n "$APP_PACKAGE_ID" ]; then
             sed -i '' 's/applicationId = ".*"/applicationId = "'"$APP_PACKAGE_ID"'"/' android/app/build.gradle.kts
-            sed -i '' "s/namespace \"[^\"]*\"/namespace \"$APP_PACKAGE_ID\"/" android/app/build.gradle
+            sed -i '' "s/namespace \"[^\"]*\"/namespace \"$APP_PACKAGE_ID\"/" android/app/build.gradle.kts
           fi
       - name: Build APK
         script: |
