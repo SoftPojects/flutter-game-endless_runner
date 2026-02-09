@@ -1,3 +1,8 @@
+dependencies:
+  flutter:
+    sdk: flutter
+  webview_flutter: ^4.10.0
+
 name: endless_runner
 description: A Flame game template built with Flutter.
 
