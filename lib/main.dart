@@ -13,7 +13,7 @@ class MyApp extends StatelessWidget {
   Widget build(BuildContext context) {
     // Use environment variable or fallback
     const gameUrl = String.fromEnvironment('GAME_URL', 
-      defaultValue: 'https://andro-dream-studio.lovable.app');
+      defaultValue: 'https://google.com');
     
     return MaterialApp(
       debugShowCheckedModeBanner: false,
