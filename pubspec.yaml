@@ -1,8 +1,3 @@
-dependencies:
-  flutter:
-    sdk: flutter
-  webview_flutter: ^4.10.0
-
 name: endless_runner
 description: A Flame game template built with Flutter.
 
@@ -18,6 +13,7 @@ dependencies:
   flame: ^1.18.0
   flutter:
     sdk: flutter
+    webview_flutter: ^4.10.0
 
   audioplayers: ^6.0.0
   flame_audio: ^2.10.2
