@@ -108,7 +108,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
     return Scaffold(
       body: SafeArea(
-        child: WebViewView(controller: _controller),
+        child: WebViewWidget(controller: _controller),
       ),
     );
   }
