@@ -15,11 +15,8 @@ workflows:
 
     environment:
       flutter: stable
-      java: 17
       groups:
         - codemagic_credentials  # keystore, etc.
-        vars:
-        GRADLE_OPTS: "-Xmx8g -Dorg.gradle.jvmargs=-Xmx8g"
 
     scripts:
       # 1. Download & set custom launcher icon (if provided)
@@ -71,7 +68,7 @@ workflows:
       - name: Flutter pub get
         script: flutter pub get
 
-      # 6. Build the APK/AAB with the game URL injected
+      # 5. Build the APK/AAB with the game URL injected
       - name: Build Android
         script: |
           if [ "$ANDROID_BUILD_FORMAT" = "appbundle" ]; then
