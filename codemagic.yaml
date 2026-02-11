@@ -1,60 +1,90 @@
+# =============================================================
+# Codemagic CI/CD — "Dumb Shell" Configuration
+# =============================================================
+# This file lives in the Flutter repo root.
+# All per-project customization comes from environment variables
+# injected by the trigger-build edge function. No manual edits
+# are needed for new projects.
+# =============================================================
+
 workflows:
   android-workflow:
     name: Android Build
-    max_build_duration: 60
+    max_build_duration: 30
     instance_type: mac_mini_m2
+
     environment:
       flutter: stable
       groups:
-        - A
+        - codemagic_credentials  # keystore, etc.
+
     scripts:
-      - name: Download app icon
+      # 1. Download & set custom launcher icon (if provided)
+      - name: Set app icon
         script: |
           if [ -n "$APP_ICON_URL" ]; then
-            mkdir -p assets/icons
-            curl -L -o assets/icons/icon.png "$APP_ICON_URL"
-            cat > flutter_launcher_icons.yaml << 'EOF'
-          flutter_launcher_icons:
-            android: true
-            ios: false
-            image_path: "assets/icons/icon.png"
-            adaptive_icon_background: "#1a1a2e"
-            adaptive_icon_foreground: "assets/icons/icon.png"
-          EOF
-            flutter pub add dev:flutter_launcher_icons
-            flutter pub get
+            echo "Downloading icon from $APP_ICON_URL"
+            curl -L -o assets/icon/icon.png "$APP_ICON_URL"
             dart run flutter_launcher_icons
+          else
+            echo "No custom icon URL — using default"
           fi
 
-      - name: Update app name
+      # 2. Patch app name in AndroidManifest.xml
+      - name: Set app name
         script: |
           if [ -n "$APP_NAME" ]; then
             sed -i '' "s/android:label=\"[^\"]*\"/android:label=\"$APP_NAME\"/" android/app/src/main/AndroidManifest.xml
+            echo "App name set to: $APP_NAME"
           fi
 
-      - name: Update package ID
+      # 3. Patch package ID (applicationId + namespace) in build.gradle.kts
+      - name: Set package ID
         script: |
           if [ -n "$APP_PACKAGE_ID" ]; then
-            sed -i '' 's/applicationId = ".*"/applicationId = "'"$APP_PACKAGE_ID"'"/' android/app/build.gradle.kts
-            sed -i '' 's/namespace = ".*"/namespace = "'"$APP_PACKAGE_ID"'"/' android/app/build.gradle.kts
+            GRADLE_FILE="android/app/build.gradle.kts"
+            sed -i '' "s/applicationId = \"[^\"]*\"/applicationId = \"$APP_PACKAGE_ID\"/" "$GRADLE_FILE"
+            sed -i '' "s/namespace = \"[^\"]*\"/namespace = \"$APP_PACKAGE_ID\"/" "$GRADLE_FILE"
+            echo "Package ID set to: $APP_PACKAGE_ID"
           fi
 
-      - name: Build APK
+      # 4. Inject google-services.json for Firebase
+      - name: Set up Firebase config
         script: |
-          flutter build apk --${FLUTTER_BUILD_MODE:-debug} --dart-define=GAME_URL=$OFFER_URL
+          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+            echo "$GOOGLE_SERVICES_JSON" | base64 --decode > android/app/google-services.json
+            echo "google-services.json injected"
+          else
+            echo "Warning: GOOGLE_SERVICES_JSON not set — Firebase features will not work"
+          fi
 
-      - name: Build AAB
+      # 5. Install dependencies
+      - name: Flutter pub get
+        script: flutter pub get
+
+      # 5. Build the APK/AAB with the game URL injected
+      - name: Build Android
         script: |
-          flutter build appbundle --${FLUTTER_BUILD_MODE:-release} --dart-define=GAME_URL=$OFFER_URL
+          if [ "$ANDROID_BUILD_FORMAT" = "appbundle" ]; then
+            flutter build appbundle --dart-define=GAME_URL="$OFFER_URL"
+          else
+            flutter build apk --dart-define=GAME_URL="$OFFER_URL" --${FLUTTER_BUILD_MODE:-release}
+          fi
 
     artifacts:
-      - build/app/outputs/flutter-apk/*.apk
-      - build/app/outputs/bundle/**/*.aab
+      - build/**/outputs/**/*.apk
+      - build/**/outputs/**/*.aab
 
     publishing:
       scripts:
         - name: Notify webhook
           script: |
-            curl -X POST "https://snwijgxwokcxtciobleu.supabase.co/functions/v1/codemagic-webhook" \
+            WEBHOOK_URL="${SUPABASE_URL:-https://snwijgxwokcxtciobleu.supabase.co}/functions/v1/codemagic-webhook"
+            curl -X POST "$WEBHOOK_URL" \
               -H "Content-Type: application/json" \
-              -d "{\"buildId\": \"$CM_BUILD_ID\", \"status\": \"$CM_BUILD_STEP_STATUS\", \"environment\": {\"variables\": {\"BUILD_ID\": \"$BUILD_ID\", \"PROJECT_ID\": \"$PROJECT_ID\"}}}"
+              -d "{
+                \"buildId\": \"$BUILD_ID\",
+                \"projectId\": \"$PROJECT_ID\",
+                \"status\": \"$CM_BUILD_STEP_STATUS\",
+                \"artifactUrl\": \"$CM_ARTIFACT_LINKS\"
+              }"
