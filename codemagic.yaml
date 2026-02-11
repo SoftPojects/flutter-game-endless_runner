@@ -15,8 +15,11 @@ workflows:
 
     environment:
       flutter: stable
+      java: 17
       groups:
         - codemagic_credentials  # keystore, etc.
+        vars:
+        GRADLE_OPTS: "-Xmx8g -Dorg.gradle.jvmargs=-Xmx8g"
 
     scripts:
       # 1. Download & set custom launcher icon (if provided)
