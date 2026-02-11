@@ -21,15 +21,16 @@ workflows:
     scripts:
       # 1. Download & set custom launcher icon (if provided)
       - name: Set app icon
+        ignore_failure: true
         script: |
           if [ -n "$APP_ICON_URL" ]; then
             echo "Downloading icon from $APP_ICON_URL"
             mkdir -p assets/icon
-            curl -L -o assets/icon/icon.png "$APP_ICON_URL"
+            curl -L -f -o assets/icon/icon.png "$APP_ICON_URL" || { echo "Failed to download icon — continuing"; exit 0; }
             if grep -q flutter_launcher_icons pubspec.yaml; then
-              dart run flutter_launcher_icons
+              dart run flutter_launcher_icons || echo "flutter_launcher_icons failed — continuing with default icon"
             else
-              echo "flutter_launcher_icons not in pubspec.yaml — skipping icon generation"
+              echo "flutter_launcher_icons not in pubspec.yaml — skipping"
             fi
           else
             echo "No custom icon URL — using default"
