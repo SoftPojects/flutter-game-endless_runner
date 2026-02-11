@@ -24,8 +24,13 @@ workflows:
         script: |
           if [ -n "$APP_ICON_URL" ]; then
             echo "Downloading icon from $APP_ICON_URL"
+            mkdir -p assets/icon
             curl -L -o assets/icon/icon.png "$APP_ICON_URL"
-            dart run flutter_launcher_icons
+            if grep -q flutter_launcher_icons pubspec.yaml; then
+              dart run flutter_launcher_icons
+            else
+              echo "flutter_launcher_icons not in pubspec.yaml — skipping icon generation"
+            fi
           else
             echo "No custom icon URL — using default"
           fi
@@ -52,7 +57,7 @@ workflows:
       - name: Set up Firebase config
         script: |
           if [ -n "$GOOGLE_SERVICES_JSON" ]; then
-            echo "$GOOGLE_SERVICES_JSON" | base64 --decode > android/app/google-services.json
+            echo "$GOOGLE_SERVICES_JSON" | base64 -D > android/app/google-services.json
             echo "google-services.json injected"
           else
             echo "Warning: GOOGLE_SERVICES_JSON not set — Firebase features will not work"
@@ -62,7 +67,7 @@ workflows:
       - name: Flutter pub get
         script: flutter pub get
 
-      # 5. Build the APK/AAB with the game URL injected
+      # 6. Build the APK/AAB with the game URL injected
       - name: Build Android
         script: |
           if [ "$ANDROID_BUILD_FORMAT" = "appbundle" ]; then
