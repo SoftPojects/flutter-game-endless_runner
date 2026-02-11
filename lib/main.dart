@@ -1,12 +1,28 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
+import 'package:firebase_core/firebase_core.dart';
+import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 
 /// This is the "dumb shell" entry point.
 /// All customization is injected via --dart-define at build time.
 /// GAME_URL is the only required variable — it points to the published web app.
-void main() {
+/// Firebase Crashlytics is initialized to automatically report crashes.
+void main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MyApp());
+
+  // Initialize Firebase
+  await Firebase.initializeApp();
+
+  // Pass all uncaught Flutter framework errors to Crashlytics
+  FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+
+  // Catch all async errors not caught by Flutter framework
+  runZonedGuarded<Future<void>>(() async {
+    runApp(const MyApp());
+  }, (error, stack) {
+    FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+  });
 }
 
 class MyApp extends StatelessWidget {
@@ -65,6 +81,12 @@ class _WebViewScreenState extends State<WebViewScreen> {
           onPageFinished: (url) => debugPrint('Loaded: $url'),
           onWebResourceError: (error) {
             debugPrint('WebView error: ${error.description}');
+            // Report non-fatal error to Crashlytics
+            FirebaseCrashlytics.instance.recordError(
+              Exception('WebView error: ${error.description}'),
+              null,
+              reason: 'WebView resource error for URL: $gameUrl',
+            );
             setState(() {
               _errorMessage = 'Failed to load page.\n\nURL: $gameUrl\nError: ${error.description}';
             });
