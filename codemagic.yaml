@@ -25,8 +25,8 @@ workflows:
         script: |
           if [ -n "$APP_ICON_URL" ]; then
             echo "Downloading icon from $APP_ICON_URL"
-            mkdir -p assets/icon
-            curl -L -f -o assets/icon/icon.png "$APP_ICON_URL" || { echo "Failed to download icon — continuing"; exit 0; }
+            mkdir -p assets/icons
+            curl -L -f -o assets/icons/icon.png "$APP_ICON_URL" || { echo "Failed to download icon — continuing"; exit 0; }
             if grep -q flutter_launcher_icons pubspec.yaml; then
               dart run flutter_launcher_icons || echo "flutter_launcher_icons failed — continuing with default icon"
             else
@@ -49,9 +49,14 @@ workflows:
         script: |
           if [ -n "$APP_PACKAGE_ID" ]; then
             GRADLE_FILE="android/app/build.gradle.kts"
+            MANIFEST="android/app/src/main/AndroidManifest.xml"
+            # Read the current namespace to build the original MainActivity path
+            ORIGINAL_NS=$(sed -n 's/.*namespace = "\([^"]*\)".*/\1/p' "$GRADLE_FILE")
             sed -i '' "s/applicationId = \"[^\"]*\"/applicationId = \"$APP_PACKAGE_ID\"/" "$GRADLE_FILE"
             sed -i '' "s/namespace = \"[^\"]*\"/namespace = \"$APP_PACKAGE_ID\"/" "$GRADLE_FILE"
-            echo "Package ID set to: $APP_PACKAGE_ID"
+            # Pin MainActivity to its original fully-qualified class name
+            sed -i '' "s/android:name=\".MainActivity\"/android:name=\"$ORIGINAL_NS.MainActivity\"/" "$MANIFEST"
+            echo "Package ID set to: $APP_PACKAGE_ID (MainActivity pinned to $ORIGINAL_NS.MainActivity)"
           fi
 
       # 4. Inject google-services.json for Firebase
