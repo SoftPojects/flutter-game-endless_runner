@@ -8,17 +8,16 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 /// All customization is injected via --dart-define at build time.
 /// GAME_URL is the only required variable — it points to the published web app.
 /// Firebase Crashlytics is initialized to automatically report crashes.
-void main() async {
-  WidgetsFlutterBinding.ensureInitialized();
-
-  // Initialize Firebase
-  await Firebase.initializeApp();
-
-  // Pass all uncaught Flutter framework errors to Crashlytics
-  FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
-
-  // Catch all async errors not caught by Flutter framework
+void main() {
   runZonedGuarded<Future<void>>(() async {
+    WidgetsFlutterBinding.ensureInitialized();
+
+    // Initialize Firebase
+    await Firebase.initializeApp();
+
+    // Pass all uncaught Flutter framework errors to Crashlytics
+    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
+
     runApp(const MyApp());
   }, (error, stack) {
     FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
