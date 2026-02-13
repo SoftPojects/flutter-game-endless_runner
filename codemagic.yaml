@@ -19,6 +19,21 @@ workflows:
         - codemagic_credentials  # keystore, etc.
 
     scripts:
+      # 0. Set up release keystore for signing
+      - name: Set up keystore
+        script: |
+          if [ -n "$CM_KEYSTORE" ]; then
+            echo $CM_KEYSTORE | base64 --decode > $CM_BUILD_DIR/release-key.jks
+            echo "storePassword=$CM_KEYSTORE_PASSWORD" > "$CM_BUILD_DIR/android/key.properties"
+            echo "keyPassword=$CM_KEY_PASSWORD" >> "$CM_BUILD_DIR/android/key.properties"
+            echo "keyAlias=$CM_KEY_ALIAS" >> "$CM_BUILD_DIR/android/key.properties"
+            echo "storeFile=$CM_BUILD_DIR/release-key.jks" >> "$CM_BUILD_DIR/android/key.properties"
+            echo "Release keystore configured"
+            cat "$CM_BUILD_DIR/android/key.properties"
+          else
+            echo "WARNING: No keystore configured — build will use debug signing"
+          fi
+
       # 1. Download & set custom launcher icon (if provided)
       - name: Set app icon
         ignore_failure: true
