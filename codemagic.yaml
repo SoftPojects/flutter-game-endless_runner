@@ -50,12 +50,38 @@ workflows:
           if [ -n "$APP_PACKAGE_ID" ]; then
             GRADLE_FILE="android/app/build.gradle.kts"
             MANIFEST="android/app/src/main/AndroidManifest.xml"
-            # Read the current namespace to build the original MainActivity path
-            ORIGINAL_NS=$(sed -n 's/.*namespace = "\([^"]*\)".*/\1/p' "$GRADLE_FILE")
+
+            echo "=== DEBUG: Gradle file contents (namespace line) ==="
+            grep -i "namespace" "$GRADLE_FILE" || echo "No namespace line found!"
+
+            # Read the current namespace — try multiple patterns
+            ORIGINAL_NS=$(sed -n 's/.*namespace[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$GRADLE_FILE" | head -1)
+
+            # Fallback: try without = (Groovy syntax)
+            if [ -z "$ORIGINAL_NS" ]; then
+              ORIGINAL_NS=$(sed -n 's/.*namespace[[:space:]]*"\([^"]*\)".*/\1/p' "$GRADLE_FILE" | head -1)
+            fi
+
+            # Hardcoded fallback for the known template
+            if [ -z "$ORIGINAL_NS" ]; then
+              ORIGINAL_NS="com.example.endless_runner"
+              echo "WARNING: Could not extract namespace, using fallback: $ORIGINAL_NS"
+            fi
+
+            echo "Original namespace: $ORIGINAL_NS"
+            echo "New package ID: $APP_PACKAGE_ID"
+
+            # Replace applicationId and namespace in Gradle
             sed -i '' "s/applicationId = \"[^\"]*\"/applicationId = \"$APP_PACKAGE_ID\"/" "$GRADLE_FILE"
             sed -i '' "s/namespace = \"[^\"]*\"/namespace = \"$APP_PACKAGE_ID\"/" "$GRADLE_FILE"
-            # Pin MainActivity to its original fully-qualified class name
-            sed -i '' "s/android:name=\".MainActivity\"/android:name=\"$ORIGINAL_NS.MainActivity\"/" "$MANIFEST"
+
+            # Pin MainActivity to the ORIGINAL fully-qualified class name
+            # Handle both .MainActivity and already-qualified names
+            sed -i '' "s|android:name=\"\.MainActivity\"|android:name=\"$ORIGINAL_NS.MainActivity\"|" "$MANIFEST"
+
+            echo "=== DEBUG: AndroidManifest activity line after patch ==="
+            grep "MainActivity" "$MANIFEST"
+
             echo "Package ID set to: $APP_PACKAGE_ID (MainActivity pinned to $ORIGINAL_NS.MainActivity)"
           fi
 
@@ -69,18 +95,34 @@ workflows:
             echo "Warning: GOOGLE_SERVICES_JSON not set — Firebase features will not work"
           fi
 
-      # 5. Install dependencies
+      # 5. Set app version
+      - name: Set app version
+        script: |
+          if [ -n "$APP_VERSION_NAME" ] || [ -n "$APP_VERSION_CODE" ]; then
+            VER_NAME="${APP_VERSION_NAME:-1.0.0}"
+            VER_CODE="${APP_VERSION_CODE:-1}"
+            PUBSPEC="pubspec.yaml"
+            sed -i '' "s/^version: .*/version: ${VER_NAME}+${VER_CODE}/" "$PUBSPEC"
+            echo "Version set to: ${VER_NAME}+${VER_CODE}"
+          fi
+
+      # 6. Install dependencies
       - name: Flutter pub get
         script: flutter pub get
 
-      # 5. Build the APK/AAB with the game URL injected
+      # 7. Build the APK/AAB with the game URL injected
       - name: Build Android
         script: |
-          if [ "$ANDROID_BUILD_FORMAT" = "appbundle" ]; then
-            flutter build appbundle --dart-define=GAME_URL="$OFFER_URL"
-          else
-            flutter build apk --dart-define=GAME_URL="$OFFER_URL" --${FLUTTER_BUILD_MODE:-release}
-          fi
+          DART_DEFINES="--dart-define=GAME_URL=$OFFER_URL"
+          [ -n "$AF_DEV_KEY" ] && DART_DEFINES="$DART_DEFINES --dart-define=AF_DEV_KEY=$AF_DEV_KEY"
+          [ -n "$SUPABASE_URL" ] && DART_DEFINES="$DART_DEFINES --dart-define=SUPABASE_URL=$SUPABASE_URL"
+          [ -n "$APP_PACKAGE_ID" ] && DART_DEFINES="$DART_DEFINES --dart-define=APP_PACKAGE_ID=$APP_PACKAGE_ID"
+
+          # Always build release APK
+          flutter build apk $DART_DEFINES --release --build-name="${APP_VERSION_NAME:-1.0.0}" --build-number="${APP_VERSION_CODE:-1}"
+
+          # Always build AAB for Google Play
+          flutter build appbundle $DART_DEFINES --build-name="${APP_VERSION_NAME:-1.0.0}" --build-number="${APP_VERSION_CODE:-1}"
 
     artifacts:
       - build/**/outputs/**/*.apk
