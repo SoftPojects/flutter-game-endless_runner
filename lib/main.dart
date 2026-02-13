@@ -1,23 +1,22 @@
 import 'dart:async';
+import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+import 'package:appsflyer_sdk/appsflyer_sdk.dart';
+import 'package:http/http.dart' as http;
 
-/// This is the "dumb shell" entry point.
-/// All customization is injected via --dart-define at build time.
-/// GAME_URL is the only required variable — it points to the published web app.
-/// Firebase Crashlytics is initialized to automatically report crashes.
+/// Deep Link + AppsFlyer + Keitaro integration.
+/// Configuration injected via --dart-define at build time:
+///   GAME_URL      - fallback URL for organic installs
+///   AF_DEV_KEY    - AppsFlyer Dev Key
+///   SUPABASE_URL  - Supabase project URL (for resolve-user endpoint)
 void main() {
   runZonedGuarded<Future<void>>(() async {
     WidgetsFlutterBinding.ensureInitialized();
-
-    // Initialize Firebase
     await Firebase.initializeApp();
-
-    // Pass all uncaught Flutter framework errors to Crashlytics
     FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
-
     runApp(const MyApp());
   }, (error, stack) {
     FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
@@ -46,21 +45,38 @@ class WebViewScreen extends StatefulWidget {
 class _WebViewScreenState extends State<WebViewScreen> {
   late final WebViewController _controller;
 
-  // Injected at build time via: --dart-define=GAME_URL=https://...
   static const String gameUrl = String.fromEnvironment('GAME_URL');
+  static const String afDevKey = String.fromEnvironment('AF_DEV_KEY');
+  static const String supabaseUrl = String.fromEnvironment('SUPABASE_URL');
 
   String? _errorMessage;
+  bool _isLoading = true;
+  bool _deepLinkHandled = false;
+  AppsflyerSdk? _appsflyerSdk;
+  String? _appsflyerId;
 
   @override
   void initState() {
     super.initState();
 
-    // Guard against empty or invalid GAME_URL
     if (gameUrl.isEmpty) {
       _errorMessage = 'GAME_URL is not configured.\n\nThe app was built without a valid URL. Please rebuild with a valid GAME_URL.';
+      _isLoading = false;
       return;
     }
 
+    _initWebViewController();
+    _initAppsFlyer();
+
+    // Fallback: if no deep link received within 5 seconds, load GAME_URL
+    Future.delayed(const Duration(seconds: 5), () {
+      if (!_deepLinkHandled && mounted) {
+        _loadUrl(gameUrl);
+      }
+    });
+  }
+
+  void _initWebViewController() {
     Uri? parsedUri;
     try {
       parsedUri = Uri.parse(gameUrl);
@@ -69,6 +85,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
       }
     } catch (e) {
       _errorMessage = 'Invalid GAME_URL: $gameUrl\n\nError: $e';
+      _isLoading = false;
       return;
     }
 
@@ -77,22 +94,127 @@ class _WebViewScreenState extends State<WebViewScreen> {
       ..setNavigationDelegate(
         NavigationDelegate(
           onPageStarted: (url) => debugPrint('Loading: $url'),
-          onPageFinished: (url) => debugPrint('Loaded: $url'),
+          onPageFinished: (url) {
+            debugPrint('Loaded: $url');
+            if (mounted) setState(() => _isLoading = false);
+          },
           onWebResourceError: (error) {
             debugPrint('WebView error: ${error.description}');
-            // Report non-fatal error to Crashlytics
             FirebaseCrashlytics.instance.recordError(
               Exception('WebView error: ${error.description}'),
               null,
-              reason: 'WebView resource error for URL: $gameUrl',
+              reason: 'WebView resource error',
             );
-            setState(() {
-              _errorMessage = 'Failed to load page.\n\nURL: $gameUrl\nError: ${error.description}';
-            });
           },
         ),
-      )
-      ..loadRequest(parsedUri!);
+      );
+  }
+
+  void _initAppsFlyer() {
+    if (afDevKey.isEmpty) {
+      debugPrint('AF_DEV_KEY not set — skipping AppsFlyer init');
+      return;
+    }
+
+    final options = AppsFlyerOptions(
+      afDevKey: afDevKey,
+      showDebug: true,
+    );
+
+    _appsflyerSdk = AppsflyerSdk(options);
+
+    _appsflyerSdk!.initSdk(
+      registerConversionDataCallback: true,
+      registerOnAppOpenAttributionCallback: true,
+      registerOnDeepLinkingCallback: true,
+    );
+
+    // Get AppsFlyer ID
+    _appsflyerSdk!.getAppsFlyerUID().then((uid) {
+      _appsflyerId = uid;
+      debugPrint('AppsFlyer ID: $uid');
+    });
+
+    // Deep linking callback (Unified Deep Linking)
+    _appsflyerSdk!.onDeepLinking((DeepLinkResult result) {
+      debugPrint('Deep link result: ${result.status}');
+      if (result.status == Status.FOUND) {
+        final deepLink = result.deepLink;
+        if (deepLink != null) {
+          final deepLinkValue = deepLink.deepLinkValue ?? '';
+          debugPrint('Deep link value: $deepLinkValue');
+          _handleDeepLink(deepLinkValue);
+        }
+      }
+    });
+  }
+
+  Future<void> _handleDeepLink(String deepLinkValue) async {
+    if (deepLinkValue.isEmpty || _deepLinkHandled) return;
+    _deepLinkHandled = true;
+
+    try {
+      // Parse: username_alias_sub2_sub3_sub4_sub5
+      final parts = deepLinkValue.split('_');
+      if (parts.length < 2) {
+        debugPrint('Deep link too short, loading GAME_URL');
+        _loadUrl(gameUrl);
+        return;
+      }
+
+      final username = parts[0];
+      final alias = parts[1];
+      final sub2 = parts.length > 2 ? parts[2] : '';
+      final sub3 = parts.length > 3 ? parts[3] : '';
+      final sub4 = parts.length > 4 ? parts[4] : '';
+      final sub5 = parts.length > 5 ? parts[5] : '';
+
+      // Resolve username to keitaro_domain
+      final resolveUrl = '$supabaseUrl/functions/v1/resolve-user?username=$username';
+      debugPrint('Resolving user: $resolveUrl');
+
+      final response = await http.get(Uri.parse(resolveUrl));
+
+      if (response.statusCode != 200) {
+        debugPrint('resolve-user failed: ${response.statusCode} ${response.body}');
+        _loadUrl(gameUrl);
+        return;
+      }
+
+      final data = jsonDecode(response.body);
+      final keitaroDomain = data['keitaro_domain'] as String?;
+
+      if (keitaroDomain == null || keitaroDomain.isEmpty) {
+        debugPrint('No keitaro_domain found');
+        _loadUrl(gameUrl);
+        return;
+      }
+
+      // Build Keitaro URL
+      // Get package name for sub1
+      final packageName = const String.fromEnvironment('APP_PACKAGE_ID', defaultValue: '');
+      final afId = _appsflyerId ?? '';
+
+      final keitaroUrl = 'https://$keitaroDomain/$alias'
+          '?appsflyer_id=$afId'
+          '&sub1=$packageName'
+          '&sub2=$sub2'
+          '&sub3=$sub3'
+          '&sub4=$sub4'
+          '&sub5=$sub5';
+
+      debugPrint('Loading Keitaro URL: $keitaroUrl');
+      _loadUrl(keitaroUrl);
+    } catch (e, stack) {
+      debugPrint('Deep link handling error: $e');
+      FirebaseCrashlytics.instance.recordError(e, stack, reason: 'Deep link handling');
+      _loadUrl(gameUrl);
+    }
+  }
+
+  void _loadUrl(String url) {
+    final uri = Uri.parse(url);
+    _controller.loadRequest(uri);
   }
 
   @override
@@ -129,7 +251,15 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
     return Scaffold(
       body: SafeArea(
-        child: WebViewWidget(controller: _controller),
+        child: Stack(
+          children: [
+            WebViewWidget(controller: _controller),
+            if (_isLoading)
+              const Center(
+                child: CircularProgressIndicator(color: Colors.white),
+              ),
+          ],
+        ),
       ),
     );
   }
