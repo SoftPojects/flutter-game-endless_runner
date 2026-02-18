@@ -132,6 +132,7 @@ workflows:
           [ -n "$AF_DEV_KEY" ] && DART_DEFINES="$DART_DEFINES --dart-define=AF_DEV_KEY=$AF_DEV_KEY"
           [ -n "$SUPABASE_URL" ] && DART_DEFINES="$DART_DEFINES --dart-define=SUPABASE_URL=$SUPABASE_URL"
           [ -n "$APP_PACKAGE_ID" ] && DART_DEFINES="$DART_DEFINES --dart-define=APP_PACKAGE_ID=$APP_PACKAGE_ID"
+          [ -n "$BUILDER_PROJECT_ID" ] && DART_DEFINES="$DART_DEFINES --dart-define=BUILDER_PROJECT_ID=$BUILDER_PROJECT_ID"
 
           # Always build release APK
           flutter build apk $DART_DEFINES --release --build-name="${APP_VERSION_NAME:-1.0.0}" --build-number="${APP_VERSION_CODE:-1}"
