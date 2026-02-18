@@ -198,6 +198,8 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
       registerOnDeepLinkingCallback: true,
     );
 
+    _appsflyerSdk!.startSDK();
+
     _appsflyerSdk!.getAppsFlyerUID().then((uid) {
       _appsflyerId = uid;
       debugPrint('AppsFlyer ID: $uid');
