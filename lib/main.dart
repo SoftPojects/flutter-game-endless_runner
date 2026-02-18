@@ -48,6 +48,7 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
 
   static const String gameUrl = String.fromEnvironment('GAME_URL');
   static const String afDevKey = String.fromEnvironment('AF_DEV_KEY');
+  static const String appId = String.fromEnvironment('APP_PACKAGE_ID');
   static const String supabaseUrl = String.fromEnvironment('SUPABASE_URL');
 
   String? _errorMessage;
@@ -187,6 +188,7 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
 
     final options = AppsFlyerOptions(
       afDevKey: afDevKey,
+      appId: appId,
       showDebug: true,
     );
 
