@@ -6,6 +6,7 @@ import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:appsflyer_sdk/appsflyer_sdk.dart';
 import 'package:http/http.dart' as http;
+import 'package:connectivity_plus/connectivity_plus.dart';
 
 /// Deep Link + AppsFlyer + Keitaro integration.
 /// Configuration injected via --dart-define at build time:
@@ -42,7 +43,7 @@ class WebViewScreen extends StatefulWidget {
   State<WebViewScreen> createState() => _WebViewScreenState();
 }
 
-class _WebViewScreenState extends State<WebViewScreen> {
+class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProviderStateMixin {
   late final WebViewController _controller;
 
   static const String gameUrl = String.fromEnvironment('GAME_URL');
@@ -51,13 +52,26 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
   String? _errorMessage;
   bool _isLoading = true;
+  bool _isOffline = false;
   bool _deepLinkHandled = false;
   AppsflyerSdk? _appsflyerSdk;
   String? _appsflyerId;
+  late AnimationController _pulseController;
+  late Animation<double> _pulseAnimation;
+  StreamSubscription? _connectivitySubscription;
 
   @override
   void initState() {
     super.initState();
+
+    // Pulse animation for the offline icon
+    _pulseController = AnimationController(
+      duration: const Duration(seconds: 2),
+      vsync: this,
+    )..repeat(reverse: true);
+    _pulseAnimation = Tween<double>(begin: 0.8, end: 1.2).animate(
+      CurvedAnimation(parent: _pulseController, curve: Curves.easeInOut),
+    );
 
     if (gameUrl.isEmpty) {
       _errorMessage = 'GAME_URL is not configured.\n\nThe app was built without a valid URL. Please rebuild with a valid GAME_URL.';
@@ -67,6 +81,7 @@ class _WebViewScreenState extends State<WebViewScreen> {
 
     _initWebViewController();
     _initAppsFlyer();
+    _initConnectivityListener();
 
     // Fallback: if no deep link received within 5 seconds, load GAME_URL
     Future.delayed(const Duration(seconds: 5), () {
@@ -74,6 +89,46 @@ class _WebViewScreenState extends State<WebViewScreen> {
         _loadUrl(gameUrl);
       }
     });
+  }
+
+  @override
+  void dispose() {
+    _pulseController.dispose();
+    _connectivitySubscription?.cancel();
+    super.dispose();
+  }
+
+  void _initConnectivityListener() {
+    _checkConnectivity();
+    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((results) {
+      final isConnected = results.any((r) => r != ConnectivityResult.none);
+      if (mounted) {
+        final wasOffline = _isOffline;
+        setState(() => _isOffline = !isConnected);
+        // Auto-retry when connection is restored
+        if (wasOffline && isConnected) {
+          _retryLoading();
+        }
+      }
+    });
+  }
+
+  Future<void> _checkConnectivity() async {
+    final results = await Connectivity().checkConnectivity();
+    final isConnected = results.any((r) => r != ConnectivityResult.none);
+    if (mounted) {
+      setState(() => _isOffline = !isConnected);
+    }
+  }
+
+  void _retryLoading() {
+    setState(() => _isLoading = true);
+    if (!_deepLinkHandled) {
+      _loadUrl(gameUrl);
+    } else {
+      // Reload current page
+      _controller.reload();
+    }
   }
 
   void _initWebViewController() {
@@ -100,6 +155,20 @@ class _WebViewScreenState extends State<WebViewScreen> {
           },
           onWebResourceError: (error) {
             debugPrint('WebView error: ${error.description}');
+            // Show offline screen on network errors
+            if (error.errorType == WebResourceErrorType.hostLookup ||
+                error.errorType == WebResourceErrorType.connect ||
+                error.errorType == WebResourceErrorType.timeout ||
+                error.description.contains('net::ERR_INTERNET_DISCONNECTED') ||
+                error.description.contains('net::ERR_NAME_NOT_RESOLVED') ||
+                error.description.contains('net::ERR_CONNECTION')) {
+              if (mounted) {
+                setState(() {
+                  _isOffline = true;
+                  _isLoading = false;
+                });
+              }
+            }
             FirebaseCrashlytics.instance.recordError(
               Exception('WebView error: ${error.description}'),
               null,
@@ -129,13 +198,11 @@ class _WebViewScreenState extends State<WebViewScreen> {
       registerOnDeepLinkingCallback: true,
     );
 
-    // Get AppsFlyer ID
     _appsflyerSdk!.getAppsFlyerUID().then((uid) {
       _appsflyerId = uid;
       debugPrint('AppsFlyer ID: $uid');
     });
 
-    // Deep linking callback (Unified Deep Linking)
     _appsflyerSdk!.onDeepLinking((DeepLinkResult result) {
       debugPrint('Deep link result: ${result.status}');
       if (result.status == Status.FOUND) {
@@ -154,7 +221,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
     _deepLinkHandled = true;
 
     try {
-      // Parse: username_alias_sub2_sub3_sub4_sub5
       final parts = deepLinkValue.split('_');
       if (parts.length < 2) {
         debugPrint('Deep link too short, loading GAME_URL');
@@ -169,7 +235,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
       final sub4 = parts.length > 4 ? parts[4] : '';
       final sub5 = parts.length > 5 ? parts[5] : '';
 
-      // Resolve username to keitaro_domain
       final resolveUrl = '$supabaseUrl/functions/v1/resolve-user?username=$username';
       debugPrint('Resolving user: $resolveUrl');
 
@@ -190,8 +255,6 @@ class _WebViewScreenState extends State<WebViewScreen> {
         return;
       }
 
-      // Build Keitaro URL
-      // Get package name for sub1
       final packageName = const String.fromEnvironment('APP_PACKAGE_ID', defaultValue: '');
       final afId = _appsflyerId ?? '';
 
@@ -240,6 +303,102 @@ class _WebViewScreenState extends State<WebViewScreen> {
                     _errorMessage!,
                     textAlign: TextAlign.center,
                     style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    // Offline screen
+    if (_isOffline) {
+      return Scaffold(
+        backgroundColor: const Color(0xFF1A1A2E),
+        body: SafeArea(
+          child: Center(
+            child: Padding(
+              padding: const EdgeInsets.all(40.0),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  // Animated WiFi-off icon
+                  AnimatedBuilder(
+                    animation: _pulseAnimation,
+                    builder: (context, child) {
+                      return Transform.scale(
+                        scale: _pulseAnimation.value,
+                        child: Container(
+                          width: 120,
+                          height: 120,
+                          decoration: BoxDecoration(
+                            shape: BoxShape.circle,
+                            color: Colors.white.withOpacity(0.05),
+                            border: Border.all(
+                              color: Colors.white.withOpacity(0.1),
+                              width: 2,
+                            ),
+                          ),
+                          child: const Icon(
+                            Icons.wifi_off_rounded,
+                            color: Colors.white70,
+                            size: 56,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                  const SizedBox(height: 40),
+                  const Text(
+                    'No Internet Connection',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: -0.5,
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Please check your Wi-Fi or mobile data\nand try again',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.white54,
+                      fontSize: 16,
+                      height: 1.5,
+                    ),
+                  ),
+                  const SizedBox(height: 40),
+                  // Retry button
+                  SizedBox(
+                    width: 200,
+                    height: 52,
+                    child: ElevatedButton(
+                      onPressed: _retryLoading,
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: const Color(0xFF3B82F6),
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16),
+                        ),
+                        elevation: 0,
+                      ),
+                      child: const Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: [
+                          Icon(Icons.refresh_rounded, size: 20),
+                          SizedBox(width: 8),
+                          Text(
+                            'Try Again',
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
                 ],
               ),
