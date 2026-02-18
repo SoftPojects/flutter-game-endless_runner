@@ -110,7 +110,35 @@ workflows:
             echo "Warning: GOOGLE_SERVICES_JSON not set — Firebase features will not work"
           fi
 
-      # 5. Set app version
+      # 5. Patch deep link URI scheme in AndroidManifest.xml
+      - name: Set URI scheme
+        script: |
+          MANIFEST="android/app/src/main/AndroidManifest.xml"
+          if [ -n "$APP_URI_SCHEME" ]; then
+            # Check if deep_linking_filter already exists
+            if grep -q "deep_linking_filter" "$MANIFEST"; then
+              # Replace the existing scheme value
+              sed -i '' "s/android:scheme=\"[^\"]*\"/android:scheme=\"$APP_URI_SCHEME\"/" "$MANIFEST"
+              echo "URI scheme updated to: $APP_URI_SCHEME"
+            else
+              # Insert the intent-filter block before the closing </activity> tag
+              sed -i '' "/<\/activity>/i\\
+            <intent-filter android:label=\"deep_linking_filter\">\\
+                <action android:name=\"android.intent.action.VIEW\" />\\
+                <category android:name=\"android.intent.category.DEFAULT\" />\\
+                <category android:name=\"android.intent.category.BROWSABLE\" />\\
+                <data android:scheme=\"$APP_URI_SCHEME\" />\\
+            </intent-filter>
+" "$MANIFEST"
+              echo "Deep link intent-filter added with scheme: $APP_URI_SCHEME"
+            fi
+            echo "=== DEBUG: Manifest intent-filter ==="
+            grep -A 6 "deep_linking_filter" "$MANIFEST" || echo "No deep_linking_filter found"
+          else
+            echo "WARNING: APP_URI_SCHEME not set — deep links will not work"
+          fi
+
+      # 6. Set app version
       - name: Set app version
         script: |
           if [ -n "$APP_VERSION_NAME" ] || [ -n "$APP_VERSION_CODE" ]; then
