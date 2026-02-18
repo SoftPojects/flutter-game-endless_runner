@@ -33,6 +33,7 @@ class AppConfig {
 
 class DeepLinkData {
   final String username;
+  final String domain; // Keitaro domain (hyphens replaced with dots)
   final String alias;
   final String sub2;
   final String sub3;
@@ -41,6 +42,7 @@ class DeepLinkData {
 
   const DeepLinkData({
     required this.username,
+    required this.domain,
     required this.alias,
     this.sub2 = '',
     this.sub3 = '',
@@ -50,19 +52,22 @@ class DeepLinkData {
 }
 
 class DeepLinkParser {
+  /// Format: username_domain_alias_sub2_sub3_sub4_sub5
+  /// Domain hyphens are converted to dots (e.g. mytracker-com → mytracker.com)
   static DeepLinkData? parse(String deepLinkValue) {
     if (deepLinkValue.isEmpty) return null;
 
     final parts = deepLinkValue.split('_');
-    if (parts.length < 2) return null;
+    if (parts.length < 3) return null; // Need at least username, domain, alias
 
     return DeepLinkData(
       username: parts[0],
-      alias: parts[1],
-      sub2: parts.length > 2 ? parts[2] : '',
-      sub3: parts.length > 3 ? parts[3] : '',
-      sub4: parts.length > 4 ? parts[4] : '',
-      sub5: parts.length > 5 ? parts[5] : '',
+      domain: parts[1].replaceAll('-', '.'),
+      alias: parts[2],
+      sub2: parts.length > 3 ? parts[3] : '',
+      sub3: parts.length > 4 ? parts[4] : '',
+      sub4: parts.length > 5 ? parts[5] : '',
+      sub5: parts.length > 6 ? parts[6] : '',
     );
   }
 }
@@ -75,7 +80,10 @@ class AppsFlyerService {
   AppsflyerSdk? _sdk;
   String? uid;
 
-  Future<void> init(void Function(DeepLinkResult) onDeepLink) async {
+  Future<void> init({
+    required void Function(DeepLinkResult) onDeepLink,
+    required void Function(String campaign) onConversionData,
+  }) async {
     if (AppConfig.afDevKey.isEmpty) {
       debugPrint('AF_DEV_KEY not set — skipping AppsFlyer init');
       return;
@@ -103,6 +111,19 @@ class AppsFlyerService {
     });
 
     _sdk!.onDeepLinking(onDeepLink);
+
+    // Listen for conversion data (install attribution) as fallback
+    _sdk!.onInstallConversionData((data) {
+      debugPrint('Conversion data received: $data');
+      if (data is Map) {
+        final payload = data['payload'] ?? data;
+        final campaign = (payload is Map ? payload['campaign'] : null) as String?;
+        if (campaign != null && campaign.isNotEmpty) {
+          debugPrint('Campaign from conversion data: $campaign');
+          onConversionData(campaign);
+        }
+      }
+    });
   }
 }
 
@@ -175,7 +196,10 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     }
 
     _initWebViewController();
-    _appsFlyerService.init(_onDeepLinkResult);
+    _appsFlyerService.init(
+      onDeepLink: _onDeepLinkResult,
+      onConversionData: _onConversionCampaign,
+    );
     _initConnectivityListener();
 
     Future.delayed(const Duration(seconds: 5), () {
@@ -190,6 +214,20 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     _pulseController.dispose();
     _connectivitySubscription?.cancel();
     super.dispose();
+  }
+
+  // ── Conversion data fallback ──
+
+  void _onConversionCampaign(String campaign) {
+    if (_deepLinkHandled) return;
+    // Try to parse campaign name as deep link (username_domain_alias...)
+    final parsed = DeepLinkParser.parse(campaign);
+    if (parsed != null) {
+      debugPrint('Using campaign name as fallback deep link: $campaign');
+      _handleDeepLink(campaign);
+    } else {
+      debugPrint('Campaign name does not match deep link pattern: $campaign');
+    }
   }
 
   // ── Deep link callback ──
@@ -213,34 +251,27 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     try {
       final data = DeepLinkParser.parse(deepLinkValue);
       if (data == null) {
-        debugPrint('Deep link too short, loading GAME_URL');
+        debugPrint('Deep link too short (need username_domain_alias), loading GAME_URL');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
 
+      // Authorization check — verify the username exists
       final resolveUrl = '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
-      debugPrint('Resolving user: $resolveUrl');
+      debugPrint('Verifying user: $resolveUrl');
 
       final response = await http.get(Uri.parse(resolveUrl));
 
       if (response.statusCode != 200) {
-        debugPrint('resolve-user failed: ${response.statusCode} ${response.body}');
+        debugPrint('resolve-user auth check failed: ${response.statusCode} ${response.body}');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
 
-      final json = jsonDecode(response.body);
-      final keitaroDomain = json['keitaro_domain'] as String?;
-
-      if (keitaroDomain == null || keitaroDomain.isEmpty) {
-        debugPrint('No keitaro_domain found');
-        _loadUrl(AppConfig.gameUrl);
-        return;
-      }
-
+      // Domain comes from the deep link itself (hyphens already replaced with dots)
       final afId = _appsFlyerService.uid ?? '';
 
-      final keitaroUrl = 'https://$keitaroDomain/${data.alias}'
+      final keitaroUrl = 'https://${data.domain}/${data.alias}'
           '?sub1=${AppConfig.appId}'
           '&sub2=${data.sub2}'
           '&sub3=${data.sub3}'
