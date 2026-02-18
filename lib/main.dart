@@ -17,12 +17,14 @@ class AppConfig {
   static const String afDevKey = String.fromEnvironment('AF_DEV_KEY');
   static const String appId = String.fromEnvironment('APP_PACKAGE_ID');
   static const String supabaseUrl = String.fromEnvironment('SUPABASE_URL');
+  static const String builderProjectId = String.fromEnvironment('BUILDER_PROJECT_ID');
 
   static bool get isValid =>
       gameUrl.isNotEmpty &&
       afDevKey.isNotEmpty &&
       appId.isNotEmpty &&
-      supabaseUrl.isNotEmpty;
+      supabaseUrl.isNotEmpty &&
+      builderProjectId.isNotEmpty;
 }
 
 // ─────────────────────────────────────────────
@@ -239,12 +241,13 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
       final afId = _appsFlyerService.uid ?? '';
 
       final keitaroUrl = 'https://$keitaroDomain/${data.alias}'
-          '?appsflyer_id=$afId'
-          '&sub1=${AppConfig.appId}'
+          '?sub1=${AppConfig.appId}'
           '&sub2=${data.sub2}'
           '&sub3=${data.sub3}'
           '&sub4=${data.sub4}'
-          '&sub5=${data.sub5}';
+          '&sub5=${data.sub5}'
+          '&sub9=${AppConfig.builderProjectId}'
+          '&sub10=$afId';
 
       debugPrint('Loading Keitaro URL: $keitaroUrl');
       _loadUrl(keitaroUrl);
