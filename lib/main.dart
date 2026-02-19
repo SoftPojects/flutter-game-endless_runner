@@ -314,6 +314,9 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
   }
 
   Future<void> _handleDeepLink(String deepLinkValue) async {
+    String step1 = '';
+    String step2 = '';
+    String step3 = '';
     try {
       // Step 0.1
       if (mounted) setState(() => _debugInfo = 'Step 0.1: Raw value is: $deepLinkValue');
