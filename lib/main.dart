@@ -33,7 +33,7 @@ class AppConfig {
 
 class DeepLinkData {
   final String username;
-  final String domain; // Keitaro domain (hyphens replaced with dots)
+  final String domain;
   final String alias;
   final String sub2;
   final String sub3;
@@ -53,13 +53,11 @@ class DeepLinkData {
 
 class DeepLinkParser {
   /// Format: username_domain_alias_sub2_sub3_sub4_sub5
-  /// Domain hyphens are converted to dots (e.g. mytracker-com → mytracker.com)
+  /// Domain hyphens are converted to dots
   static DeepLinkData? parse(String deepLinkValue) {
     if (deepLinkValue.isEmpty) return null;
-
     final parts = deepLinkValue.split('_');
-    if (parts.length < 3) return null; // Need at least username, domain, alias
-
+    if (parts.length < 3) return null;
     return DeepLinkData(
       username: parts[0],
       domain: parts[1].replaceAll('-', '.'),
@@ -112,7 +110,6 @@ class AppsFlyerService {
 
     _sdk!.onDeepLinking(onDeepLink);
 
-    // Listen for conversion data (install attribution) as fallback
     _sdk!.onInstallConversionData((data) {
       debugPrint('Conversion data received: $data');
       if (data is Map) {
@@ -155,7 +152,7 @@ class MyApp extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// 5. WebViewScreen (cleaned up)
+// 5. WebViewScreen
 // ─────────────────────────────────────────────
 
 class WebViewScreen extends StatefulWidget {
@@ -165,7 +162,8 @@ class WebViewScreen extends StatefulWidget {
   State<WebViewScreen> createState() => _WebViewScreenState();
 }
 
-class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProviderStateMixin {
+class _WebViewScreenState extends State<WebViewScreen>
+    with SingleTickerProviderStateMixin {
   late final WebViewController _controller;
   final AppsFlyerService _appsFlyerService = AppsFlyerService();
 
@@ -174,7 +172,7 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
   bool _isOffline = false;
   bool _deepLinkHandled = false;
   Timer? _fallbackTimer;
-  String? _debugInfo; // Temporary debug overlay text
+  String? _debugInfo;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   StreamSubscription? _connectivitySubscription;
@@ -192,7 +190,8 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     );
 
     if (AppConfig.gameUrl.isEmpty) {
-      _errorMessage = 'GAME_URL is not configured.\n\nThe app was built without a valid URL. Please rebuild with a valid GAME_URL.';
+      _errorMessage =
+          'GAME_URL is not configured.\n\nThe app was built without a valid URL. Please rebuild with a valid GAME_URL.';
       _isLoading = false;
       return;
     }
@@ -224,7 +223,6 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
 
   void _onConversionCampaign(String campaign) {
     if (_deepLinkHandled) return;
-    // Try to parse campaign name as deep link (username_domain_alias...)
     final parsed = DeepLinkParser.parse(campaign);
     if (parsed != null) {
       debugPrint('Using campaign name as fallback deep link: $campaign');
@@ -238,9 +236,7 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
 
   void _onDeepLinkResult(DeepLinkResult result) {
     debugPrint('Deep link result: ${result.status}');
-    // Cancel timer THE MILLISECOND any deep link callback fires
     _fallbackTimer?.cancel();
-    debugPrint('DEBUG: Fallback timer cancelled in onDeepLinkResult');
 
     if (result.status == Status.FOUND) {
       final deepLink = result.deepLink;
@@ -249,7 +245,6 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
         return;
       }
 
-      // ── Deep scan: dump everything we can see ──
       final deepLinkValue = deepLink.deepLinkValue ?? '';
       String? clickEvent;
       try {
@@ -258,24 +253,30 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
         clickEvent = 'clickEvent unavailable';
       }
 
-      final fullDump = 'deepLinkValue: "$deepLinkValue"\nclickEvent: $clickEvent';
+      final fullDump =
+          'deepLinkValue: "$deepLinkValue"\nclickEvent: $clickEvent';
       debugPrint('DEBUG FULL DUMP:\n$fullDump');
       if (mounted) setState(() => _debugInfo = 'Full Map:\n$fullDump');
 
-      // ── Smart parsing: try multiple fields ──
       String resolvedValue = deepLinkValue;
 
       if (resolvedValue.isEmpty) {
-        // Try common keys inside clickEvent map
         try {
           final event = deepLink.clickEvent;
           if (event is Map) {
-            for (final key in ['deep_link_value', 'link', 'click_http_referrer', 'af_dp', 'deep_link_sub1', 'campaign']) {
+            for (final key in [
+              'deep_link_value',
+              'link',
+              'click_http_referrer',
+              'af_dp',
+              'deep_link_sub1',
+              'campaign'
+            ]) {
               final v = event[key];
               if (v != null && v.toString().isNotEmpty) {
                 resolvedValue = v.toString();
-                debugPrint('DEBUG: Found value in clickEvent["$key"]: $resolvedValue');
-                if (mounted) setState(() => _debugInfo = '$fullDump\n\nResolved from key "$key": $resolvedValue');
+                debugPrint(
+                    'DEBUG: Found value in clickEvent["$key"]: $resolvedValue');
                 break;
               }
             }
@@ -286,14 +287,19 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
       }
 
       if (resolvedValue.isEmpty) {
-        // Try getStringValue helper
-        for (final key in ['deep_link_value', 'link', 'click_http_referrer', 'af_dp', 'deep_link_sub1']) {
+        for (final key in [
+          'deep_link_value',
+          'link',
+          'click_http_referrer',
+          'af_dp',
+          'deep_link_sub1'
+        ]) {
           try {
             final v = deepLink.getStringValue(key);
             if (v != null && v.isNotEmpty) {
               resolvedValue = v;
-              debugPrint('DEBUG: Found value via getStringValue("$key"): $resolvedValue');
-              if (mounted) setState(() => _debugInfo = '$fullDump\n\nResolved via getString "$key": $resolvedValue');
+              debugPrint(
+                  'DEBUG: Found value via getStringValue("$key"): $resolvedValue');
               break;
             }
           } catch (_) {}
@@ -301,7 +307,6 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
       }
 
       if (resolvedValue.isEmpty) {
-        if (mounted) setState(() => _debugInfo = 'ALL FIELDS EMPTY\n\n$fullDump');
         debugPrint('DEBUG: All deep link fields empty, falling back to game');
         _loadUrl(AppConfig.gameUrl);
         return;
@@ -309,30 +314,25 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
 
       _handleDeepLink(resolvedValue);
     } else {
-      if (mounted) setState(() => _debugInfo = 'DeepLink status: ${result.status}');
+      if (mounted) {
+        setState(() => _debugInfo = 'DeepLink status: ${result.status}');
+      }
     }
   }
 
-  Future<void> _handleDeepLink(String deepLinkValue) async {
-    String step1 = '';
-    String step2 = '';
-    String step3 = '';
-    try {
-      // Step 0.1
-      if (mounted) setState(() => _debugInfo = 'Step 0.1: Raw value is: $deepLinkValue');
-      debugPrint('DEBUG Step 0.1: Raw value is: $deepLinkValue');
+  // ── Handle deep link ──
 
-      if (deepLinkValue.isEmpty || _deepLinkHandled) {
-        if (mounted) setState(() => _debugInfo = 'SKIP: empty=${ deepLinkValue.isEmpty} handled=$_deepLinkHandled');
-        return;
-      }
+  Future<void> _handleDeepLink(String deepLinkValue) async {
+    String s1 = '';
+    String s2 = '';
+    String s3 = '';
+
+    try {
+      if (deepLinkValue.isEmpty || _deepLinkHandled) return;
       _deepLinkHandled = true;
       _fallbackTimer?.cancel();
 
-      // Step 0.2
-      if (mounted) setState(() => _debugInfo = 'Step 0.2: Cleaning string...');
-      debugPrint('DEBUG Step 0.2: Cleaning string...');
-
+      // Strip URI scheme
       String cleanValue = deepLinkValue;
       final schemeIdx = cleanValue.indexOf('://');
       if (schemeIdx != -1) {
@@ -340,62 +340,42 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
       }
       cleanValue = cleanValue.replaceAll(RegExp(r'^/+|/+$'), '').trim();
 
-      // Step 0.3
-      if (mounted) setState(() => _debugInfo = 'Step 0.3: Cleaned value: $cleanValue');
-      debugPrint('DEBUG Step 0.3: Cleaned value: $cleanValue');
-
-      // Step 0.4
-      if (mounted) setState(() => _debugInfo = 'Step 0.4: Calling DeepLinkParser.parse...\nParts: ${cleanValue.split("_")}');
-      debugPrint('DEBUG Step 0.4: Parts=${cleanValue.split("_")}');
+      debugPrint('DEBUG: Cleaned value: $cleanValue');
 
       final data = DeepLinkParser.parse(cleanValue);
       if (data == null) {
         final parts = cleanValue.split('_');
-        final errMsg = 'PARSE FAILED: Got ${parts.length} parts (need >=3): $parts';
-        debugPrint('DEBUG: $errMsg');
-        if (mounted) setState(() => _debugInfo = errMsg);
+        s1 = 'PARSE FAILED: Got ${parts.length} parts (need >=3): $parts';
+        debugPrint('DEBUG: $s1');
+        if (mounted) setState(() => _debugInfo = s1);
         _loadUrl(AppConfig.gameUrl);
         return;
       }
 
-      // Step 1
-      final step1 = 'Step 1: OK user=${data.username} dom=${data.domain} alias=${data.alias} sub2=${data.sub2}';
-      debugPrint('DEBUG: $step1');
-      if (mounted) setState(() => _debugInfo = step1);
+      // Step 1: parsed OK
+      s1 = 'S1: user=${data.username} dom=${data.domain} alias=${data.alias} sub2=${data.sub2}';
+      debugPrint('DEBUG: $s1');
+      if (mounted) setState(() => _debugInfo = s1);
 
-      // Step 1.5 — resolve-user (bypass if SUPABASE_URL missing)
-      String step2;
+      // Step 2: resolve-user (bypass if missing or error)
       if (AppConfig.supabaseUrl.isEmpty) {
-        step2 = 'Step 2: SKIPPED — SUPABASE_URL is empty, bypassing resolve-user';
-        debugPrint('DEBUG: $step2');
-        if (mounted) setState(() => _debugInfo = '$step1\n$step2\nUsing domain from deep link directly');
+        s2 = 'S2: SKIPPED — SUPABASE_URL is empty';
+        debugPrint('DEBUG: $s2');
       } else {
-        final resolveUrl = '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
-        if (mounted) setState(() => _debugInfo = '$step1\nStep 1.5: Calling $resolveUrl');
-
-        late final http.Response response;
+        final resolveUrl =
+            '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
         try {
-          response = await http.get(Uri.parse(resolveUrl));
+          final response = await http.get(Uri.parse(resolveUrl));
+          s2 = 'S2: ${response.statusCode} — ${response.body}';
         } catch (netErr) {
-          step2 = 'Step 2: NETWORK ERROR: $netErr — bypassing, using deep link domain';
-          debugPrint('DEBUG: $step2');
-          if (mounted) setState(() => _debugInfo = '$step1\n$step2');
-          // Don't return — continue with domain from deep link
+          s2 = 'S2: NET ERROR: $netErr — bypassing';
         }
-
-        if (AppConfig.supabaseUrl.isNotEmpty) {
-          try {
-            step2 = 'Step 2: Supabase ${response.statusCode} - ${response.body}';
-          } catch (_) {
-            step2 = 'Step 2: resolve-user call failed, bypassing';
-          }
-          debugPrint('DEBUG: $step2');
-          if (mounted) setState(() => _debugInfo = '$step1\n$step2');
-        }
+        debugPrint('DEBUG: $s2');
       }
+      if (mounted) setState(() => _debugInfo = '$s1\n$s2');
 
+      // Step 3: build Keitaro URL
       final afId = _appsFlyerService.uid ?? 'no-uid';
-
       final keitaroUrl = 'https://${data.domain}/${data.alias}'
           '?sub1=${AppConfig.appId}'
           '&sub2=${data.sub2}'
@@ -405,15 +385,15 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
           '&sub9=${AppConfig.builderProjectId}'
           '&sub10=$afId';
 
-      // Step 3
-      final step3 = 'Step 3: Loading $keitaroUrl';
-      debugPrint('DEBUG: $step3');
-      if (mounted) setState(() => _debugInfo = '$step1\n$step2\n$step3');
+      s3 = 'S3: Loading $keitaroUrl';
+      debugPrint('DEBUG: $s3');
+      if (mounted) setState(() => _debugInfo = '$s1\n$s2\n$s3');
       _loadUrl(keitaroUrl);
     } catch (e, stack) {
       debugPrint('FATAL in _handleDeepLink: $e\n$stack');
-      if (mounted) setState(() => _debugInfo = 'FATAL ERROR: $e');
-      FirebaseCrashlytics.instance.recordError(e, stack, reason: 'Deep link handling');
+      if (mounted) setState(() => _debugInfo = 'FATAL: $e\n$s1\n$s2\n$s3');
+      FirebaseCrashlytics.instance
+          .recordError(e, stack, reason: 'Deep link handling');
       _loadUrl(AppConfig.gameUrl);
     }
   }
@@ -422,7 +402,8 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
 
   void _initConnectivityListener() {
     _checkConnectivity();
-    _connectivitySubscription = Connectivity().onConnectivityChanged.listen((results) {
+    _connectivitySubscription =
+        Connectivity().onConnectivityChanged.listen((results) {
       final isConnected = results.any((r) => r != ConnectivityResult.none);
       if (mounted) {
         final wasOffline = _isOffline;
@@ -476,7 +457,8 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
             if (error.errorType == WebResourceErrorType.hostLookup ||
                 error.errorType == WebResourceErrorType.connect ||
                 error.errorType == WebResourceErrorType.timeout ||
-                error.description.contains('net::ERR_INTERNET_DISCONNECTED') ||
+                error.description
+                    .contains('net::ERR_INTERNET_DISCONNECTED') ||
                 error.description.contains('net::ERR_NAME_NOT_RESOLVED') ||
                 error.description.contains('net::ERR_CONNECTION')) {
               if (mounted) {
@@ -519,17 +501,22 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                const Icon(Icons.error_outline, color: Colors.redAccent, size: 64),
+                const Icon(Icons.error_outline,
+                    color: Colors.redAccent, size: 64),
                 const SizedBox(height: 24),
                 const Text(
                   'Configuration Error',
-                  style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 22,
+                      fontWeight: FontWeight.bold),
                 ),
                 const SizedBox(height: 16),
                 Text(
                   _errorMessage!,
                   textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
+                  style: const TextStyle(
+                      color: Colors.white70, fontSize: 14, height: 1.5),
                 ),
               ],
             ),
@@ -560,9 +547,11 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
                         decoration: BoxDecoration(
                           shape: BoxShape.circle,
                           color: Colors.white.withOpacity(0.05),
-                          border: Border.all(color: Colors.white.withOpacity(0.1), width: 2),
+                          border: Border.all(
+                              color: Colors.white.withOpacity(0.1), width: 2),
                         ),
-                        child: const Icon(Icons.wifi_off_rounded, color: Colors.white70, size: 56),
+                        child: const Icon(Icons.wifi_off_rounded,
+                            color: Colors.white70, size: 56),
                       ),
                     );
                   },
@@ -570,13 +559,18 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
                 const SizedBox(height: 40),
                 const Text(
                   'No Internet Connection',
-                  style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: -0.5),
+                  style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 24,
+                      fontWeight: FontWeight.bold,
+                      letterSpacing: -0.5),
                 ),
                 const SizedBox(height: 12),
                 const Text(
                   'Please check your Wi-Fi or mobile data\nand try again',
                   textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white54, fontSize: 16, height: 1.5),
+                  style: TextStyle(
+                      color: Colors.white54, fontSize: 16, height: 1.5),
                 ),
                 const SizedBox(height: 40),
                 SizedBox(
@@ -587,7 +581,8 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
                     style: ElevatedButton.styleFrom(
                       backgroundColor: const Color(0xFF3B82F6),
                       foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+                      shape: RoundedRectangleBorder(
+                          borderRadius: BorderRadius.circular(16)),
                       elevation: 0,
                     ),
                     child: const Row(
@@ -595,7 +590,9 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
                       children: [
                         Icon(Icons.refresh_rounded, size: 20),
                         SizedBox(width: 8),
-                        Text('Try Again', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
+                        Text('Try Again',
+                            style: TextStyle(
+                                fontSize: 16, fontWeight: FontWeight.w600)),
                       ],
                     ),
                   ),
@@ -615,8 +612,8 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
           children: [
             WebViewWidget(controller: _controller),
             if (_isLoading)
-              const Center(child: CircularProgressIndicator(color: Colors.white)),
-            // Temporary debug overlay
+              const Center(
+                  child: CircularProgressIndicator(color: Colors.white)),
             if (_debugInfo != null)
               Positioned(
                 bottom: 0,
@@ -629,8 +626,11 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
                     padding: const EdgeInsets.all(8),
                     child: Text(
                       _debugInfo!,
-                      style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontFamily: 'monospace'),
-                      maxLines: 5,
+                      style: const TextStyle(
+                          color: Colors.greenAccent,
+                          fontSize: 10,
+                          fontFamily: 'monospace'),
+                      maxLines: 6,
                       overflow: TextOverflow.ellipsis,
                     ),
                   ),
