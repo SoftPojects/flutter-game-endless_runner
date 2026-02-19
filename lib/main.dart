@@ -253,68 +253,78 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
   }
 
   Future<void> _handleDeepLink(String deepLinkValue) async {
-    if (deepLinkValue.isEmpty || _deepLinkHandled) return;
-    _deepLinkHandled = true;
-
-    // CRITICAL: Cancel the 5-second fallback timer so it doesn't race with the network request
-    _fallbackTimer?.cancel();
-    debugPrint('DEBUG: Fallback timer cancelled — deep link is being handled');
-
-    // Clean the deep link value — remove scheme + slashes (e.g. "myapp://user_dom_alias" → "user_dom_alias")
-    String cleanValue = deepLinkValue;
-    final schemeIdx = cleanValue.indexOf('://');
-    if (schemeIdx != -1) {
-      cleanValue = cleanValue.substring(schemeIdx + 3);
-    }
-    // Also strip any leading/trailing slashes or whitespace
-    cleanValue = cleanValue.replaceAll(RegExp(r'^/+|/+$'), '').trim();
-    debugPrint('DEBUG: Raw="$deepLinkValue" → Clean="$cleanValue"');
-    if (mounted) setState(() => _debugInfo = 'Step 0: Raw=$deepLinkValue\nCleaned=$cleanValue');
-
     try {
+      // Step 0.1
+      if (mounted) setState(() => _debugInfo = 'Step 0.1: Raw value is: $deepLinkValue');
+      debugPrint('DEBUG Step 0.1: Raw value is: $deepLinkValue');
+
+      if (deepLinkValue.isEmpty || _deepLinkHandled) {
+        if (mounted) setState(() => _debugInfo = 'SKIP: empty=${ deepLinkValue.isEmpty} handled=$_deepLinkHandled');
+        return;
+      }
+      _deepLinkHandled = true;
+      _fallbackTimer?.cancel();
+
+      // Step 0.2
+      if (mounted) setState(() => _debugInfo = 'Step 0.2: Cleaning string...');
+      debugPrint('DEBUG Step 0.2: Cleaning string...');
+
+      String cleanValue = deepLinkValue;
+      final schemeIdx = cleanValue.indexOf('://');
+      if (schemeIdx != -1) {
+        cleanValue = cleanValue.substring(schemeIdx + 3);
+      }
+      cleanValue = cleanValue.replaceAll(RegExp(r'^/+|/+$'), '').trim();
+
+      // Step 0.3
+      if (mounted) setState(() => _debugInfo = 'Step 0.3: Cleaned value: $cleanValue');
+      debugPrint('DEBUG Step 0.3: Cleaned value: $cleanValue');
+
+      // Step 0.4
+      if (mounted) setState(() => _debugInfo = 'Step 0.4: Calling DeepLinkParser.parse...\nParts: ${cleanValue.split("_")}');
+      debugPrint('DEBUG Step 0.4: Parts=${cleanValue.split("_")}');
+
       final data = DeepLinkParser.parse(cleanValue);
       if (data == null) {
-        debugPrint('Deep link too short (need username_domain_alias), loading GAME_URL');
-        if (mounted) setState(() => _debugInfo = 'ERROR: Parsing failed for value: $cleanValue');
+        final parts = cleanValue.split('_');
+        final errMsg = 'PARSE FAILED: Got ${parts.length} parts (need >=3): $parts';
+        debugPrint('DEBUG: $errMsg');
+        if (mounted) setState(() => _debugInfo = errMsg);
         _loadUrl(AppConfig.gameUrl);
         return;
       }
 
       // Step 1
-      final step1 = 'Step 1 Parsed: ${data.username}, ${data.domain}, ${data.alias}, sub2=${data.sub2}';
+      final step1 = 'Step 1: OK user=${data.username} dom=${data.domain} alias=${data.alias} sub2=${data.sub2}';
       debugPrint('DEBUG: $step1');
       if (mounted) setState(() => _debugInfo = step1);
 
-      // Authorization check — verify the username exists
+      // Step 1.5 — resolve-user
       final resolveUrl = '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
-      debugPrint('Verifying user: $resolveUrl');
+      if (mounted) setState(() => _debugInfo = '$step1\nStep 1.5: Calling $resolveUrl');
 
       late final http.Response response;
       try {
         response = await http.get(Uri.parse(resolveUrl));
       } catch (netErr) {
-        debugPrint('DEBUG: Network error calling resolve-user: $netErr');
+        debugPrint('DEBUG: Network error: $netErr');
         if (mounted) setState(() => _debugInfo = '$step1\nNETWORK ERROR: $netErr');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
 
-      // DEBUG: Print resolve-user response
-      debugPrint('DEBUG: resolve-user Status: ${response.statusCode}, Body: ${response.body}');
-
       // Step 2
-      final step2 = 'Step 2 Supabase: ${response.statusCode} - ${response.body}';
+      final step2 = 'Step 2: Supabase ${response.statusCode} - ${response.body}';
       debugPrint('DEBUG: $step2');
       if (mounted) setState(() => _debugInfo = '$step1\n$step2');
 
       if (response.statusCode != 200) {
-        if (mounted) setState(() => _debugInfo = '$step1\n$step2\nERROR: resolve-user failed, loading game');
+        if (mounted) setState(() => _debugInfo = '$step1\n$step2\nERROR: resolve-user failed');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
 
-      // Domain comes from the deep link itself (hyphens already replaced with dots)
-      final afId = _appsFlyerService.uid ?? '';
+      final afId = _appsFlyerService.uid ?? 'no-uid';
 
       final keitaroUrl = 'https://${data.domain}/${data.alias}'
           '?sub1=${AppConfig.appId}'
@@ -326,14 +336,13 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
           '&sub10=$afId';
 
       // Step 3
-      final step3 = 'Step 3 Loading: $keitaroUrl';
+      final step3 = 'Step 3: Loading $keitaroUrl';
       debugPrint('DEBUG: $step3');
-      if (mounted) {
-        setState(() => _debugInfo = '$step1\n$step2\n$step3');
-      }
+      if (mounted) setState(() => _debugInfo = '$step1\n$step2\n$step3');
       _loadUrl(keitaroUrl);
     } catch (e, stack) {
-      debugPrint('Deep link handling error: $e');
+      debugPrint('FATAL in _handleDeepLink: $e\n$stack');
+      if (mounted) setState(() => _debugInfo = 'FATAL ERROR: $e');
       FirebaseCrashlytics.instance.recordError(e, stack, reason: 'Deep link handling');
       _loadUrl(AppConfig.gameUrl);
     }
