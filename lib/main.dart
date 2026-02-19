@@ -360,29 +360,35 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
       debugPrint('DEBUG: $step1');
       if (mounted) setState(() => _debugInfo = step1);
 
-      // Step 1.5 — resolve-user
-      final resolveUrl = '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
-      if (mounted) setState(() => _debugInfo = '$step1\nStep 1.5: Calling $resolveUrl');
+      // Step 1.5 — resolve-user (bypass if SUPABASE_URL missing)
+      String step2;
+      if (AppConfig.supabaseUrl.isEmpty) {
+        step2 = 'Step 2: SKIPPED — SUPABASE_URL is empty, bypassing resolve-user';
+        debugPrint('DEBUG: $step2');
+        if (mounted) setState(() => _debugInfo = '$step1\n$step2\nUsing domain from deep link directly');
+      } else {
+        final resolveUrl = '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
+        if (mounted) setState(() => _debugInfo = '$step1\nStep 1.5: Calling $resolveUrl');
 
-      late final http.Response response;
-      try {
-        response = await http.get(Uri.parse(resolveUrl));
-      } catch (netErr) {
-        debugPrint('DEBUG: Network error: $netErr');
-        if (mounted) setState(() => _debugInfo = '$step1\nNETWORK ERROR: $netErr');
-        _loadUrl(AppConfig.gameUrl);
-        return;
-      }
+        late final http.Response response;
+        try {
+          response = await http.get(Uri.parse(resolveUrl));
+        } catch (netErr) {
+          step2 = 'Step 2: NETWORK ERROR: $netErr — bypassing, using deep link domain';
+          debugPrint('DEBUG: $step2');
+          if (mounted) setState(() => _debugInfo = '$step1\n$step2');
+          // Don't return — continue with domain from deep link
+        }
 
-      // Step 2
-      final step2 = 'Step 2: Supabase ${response.statusCode} - ${response.body}';
-      debugPrint('DEBUG: $step2');
-      if (mounted) setState(() => _debugInfo = '$step1\n$step2');
-
-      if (response.statusCode != 200) {
-        if (mounted) setState(() => _debugInfo = '$step1\n$step2\nERROR: resolve-user failed');
-        _loadUrl(AppConfig.gameUrl);
-        return;
+        if (AppConfig.supabaseUrl.isNotEmpty) {
+          try {
+            step2 = 'Step 2: Supabase ${response.statusCode} - ${response.body}';
+          } catch (_) {
+            step2 = 'Step 2: resolve-user call failed, bypassing';
+          }
+          debugPrint('DEBUG: $step2');
+          if (mounted) setState(() => _debugInfo = '$step1\n$step2');
+        }
       }
 
       final afId = _appsFlyerService.uid ?? 'no-uid';
