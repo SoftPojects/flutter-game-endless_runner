@@ -115,21 +115,14 @@ workflows:
         script: |
           MANIFEST="android/app/src/main/AndroidManifest.xml"
           if [ -n "$APP_URI_SCHEME" ]; then
-            # Check if deep_linking_filter already exists
             if grep -q "deep_linking_filter" "$MANIFEST"; then
-              # Replace the existing scheme value
               sed -i '' "s/android:scheme=\"[^\"]*\"/android:scheme=\"$APP_URI_SCHEME\"/" "$MANIFEST"
               echo "URI scheme updated to: $APP_URI_SCHEME"
             else
-              # Insert the intent-filter block before the closing </activity> tag
+              INTENT_BLOCK='            <intent-filter android:label="deep_linking_filter">\n                <action android:name="android.intent.action.VIEW" \/>\n                <category android:name="android.intent.category.DEFAULT" \/>\n                <category android:name="android.intent.category.BROWSABLE" \/>\n                <data android:scheme="'"$APP_URI_SCHEME"'" \/>\n            <\/intent-filter>'
               sed -i '' "/<\/activity>/i\\
-            <intent-filter android:label=\"deep_linking_filter\">\\
-                <action android:name=\"android.intent.action.VIEW\" />\\
-                <category android:name=\"android.intent.category.DEFAULT\" />\\
-                <category android:name=\"android.intent.category.BROWSABLE\" />\\
-                <data android:scheme=\"$APP_URI_SCHEME\" />\\
-            </intent-filter>
-" "$MANIFEST"
+          $INTENT_BLOCK
+          " "$MANIFEST"
               echo "Deep link intent-filter added with scheme: $APP_URI_SCHEME"
             fi
             echo "=== DEBUG: Manifest intent-filter ==="
@@ -149,11 +142,11 @@ workflows:
             echo "Version set to: ${VER_NAME}+${VER_CODE}"
           fi
 
-      # 6. Install dependencies
+      # 7. Install dependencies
       - name: Flutter pub get
         script: flutter pub get
 
-      # 7. Build the APK/AAB with the game URL injected
+      # 8. Build the APK/AAB with the game URL injected
       - name: Build Android
         script: |
           DART_DEFINES="--dart-define=GAME_URL=$OFFER_URL"
