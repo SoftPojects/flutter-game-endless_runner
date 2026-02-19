@@ -7,6 +7,7 @@ import 'package:firebase_crashlytics/firebase_crashlytics.dart';
 import 'package:appsflyer_sdk/appsflyer_sdk.dart';
 import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 // ─────────────────────────────────────────────
 // 1. AppConfig — build-time constants
@@ -71,12 +72,91 @@ class DeepLinkParser {
 }
 
 // ─────────────────────────────────────────────
-// 3. AppsFlyerService
+// 3. PersistenceService — local + server
+// ─────────────────────────────────────────────
+
+class PersistenceService {
+  static const String _localKey = 'saved_target_url';
+
+  /// Read from SharedPreferences
+  static Future<String?> getLocal() async {
+    final prefs = await SharedPreferences.getInstance();
+    final url = prefs.getString(_localKey);
+    if (url != null && url.isNotEmpty) {
+      debugPrint('PERSIST: Found local URL: $url');
+      return url;
+    }
+    return null;
+  }
+
+  /// Save to SharedPreferences
+  static Future<void> saveLocal(String url) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_localKey, url);
+    debugPrint('PERSIST: Saved URL locally');
+  }
+
+  /// Check server for existing assignment
+  static Future<String?> getFromServer(String appsflyerId) async {
+    if (AppConfig.supabaseUrl.isEmpty || appsflyerId.isEmpty) return null;
+    try {
+      final uri = Uri.parse(
+        '${AppConfig.supabaseUrl}/functions/v1/sync-user-status'
+        '?action=get&appsflyer_id=$appsflyerId',
+      );
+      final response = await http.get(uri).timeout(const Duration(seconds: 5));
+      if (response.statusCode == 200) {
+        final body = jsonDecode(response.body);
+        if (body['found'] == true && body['target_url'] != null) {
+          debugPrint('PERSIST: Found server URL: ${body['target_url']}');
+          return body['target_url'] as String;
+        }
+      }
+    } catch (e) {
+      debugPrint('PERSIST: Server check failed: $e');
+    }
+    return null;
+  }
+
+  /// Save to server
+  static Future<void> saveToServer({
+    required String appsflyerId,
+    required String projectId,
+    required String targetUrl,
+  }) async {
+    if (AppConfig.supabaseUrl.isEmpty || appsflyerId.isEmpty) return;
+    try {
+      final uri = Uri.parse(
+        '${AppConfig.supabaseUrl}/functions/v1/sync-user-status',
+      );
+      await http.post(
+        uri,
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode({
+          'action': 'save',
+          'appsflyer_id': appsflyerId,
+          'project_id': projectId,
+          'target_url': targetUrl,
+        }),
+      ).timeout(const Duration(seconds: 5));
+      debugPrint('PERSIST: Saved URL to server');
+    } catch (e) {
+      debugPrint('PERSIST: Server save failed: $e');
+    }
+  }
+}
+
+// ─────────────────────────────────────────────
+// 4. AppsFlyerService
 // ─────────────────────────────────────────────
 
 class AppsFlyerService {
   AppsflyerSdk? _sdk;
   String? uid;
+  final Completer<String?> _uidCompleter = Completer<String?>();
+
+  /// Wait for the AppsFlyer UID to become available
+  Future<String?> get uidReady => _uidCompleter.future;
 
   Future<void> init({
     required void Function(DeepLinkResult) onDeepLink,
@@ -84,6 +164,7 @@ class AppsFlyerService {
   }) async {
     if (AppConfig.afDevKey.isEmpty) {
       debugPrint('AF_DEV_KEY not set — skipping AppsFlyer init');
+      _uidCompleter.complete(null);
       return;
     }
 
@@ -106,6 +187,7 @@ class AppsFlyerService {
     _sdk!.getAppsFlyerUID().then((id) {
       uid = id;
       debugPrint('AppsFlyer ID: $id');
+      if (!_uidCompleter.isCompleted) _uidCompleter.complete(id);
     });
 
     _sdk!.onDeepLinking(onDeepLink);
@@ -125,7 +207,7 @@ class AppsFlyerService {
 }
 
 // ─────────────────────────────────────────────
-// 4. App entry point
+// 5. App entry point
 // ─────────────────────────────────────────────
 
 void main() {
@@ -152,7 +234,7 @@ class MyApp extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// 5. WebViewScreen
+// 6. WebViewScreen
 // ─────────────────────────────────────────────
 
 class WebViewScreen extends StatefulWidget {
@@ -196,18 +278,55 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
 
     _initWebViewController();
+    _startInitSequence();
+    _initConnectivityListener();
+  }
+
+  /// Main initialization: local → server → deep link/fallback
+  Future<void> _startInitSequence() async {
+    // ── Step 1: Check local persistence (instant) ──
+    final localUrl = await PersistenceService.getLocal();
+    if (localUrl != null && localUrl.isNotEmpty) {
+      debugPrint('INIT: Restored from local storage — skipping everything');
+      _deepLinkHandled = true;
+      _loadUrl(localUrl);
+      return;
+    }
+
+    // ── Step 2: Init AppsFlyer (needed for UID and deep links) ──
     _appsFlyerService.init(
       onDeepLink: _onDeepLinkResult,
       onConversionData: _onConversionCampaign,
     );
-    _initConnectivityListener();
 
-    _fallbackTimer = Timer(const Duration(seconds: 5), () {
-      if (!_deepLinkHandled && mounted) {
-        debugPrint('DEBUG: 5s fallback timer fired — loading game URL');
-        _loadUrl(AppConfig.gameUrl);
+    // ── Step 3: Check server persistence (needs AF UID) ──
+    // Wait up to 3s for the UID, then check server
+    final afId = await _appsFlyerService.uidReady.timeout(
+      const Duration(seconds: 3),
+      onTimeout: () => _appsFlyerService.uid,
+    );
+
+    if (afId != null && afId.isNotEmpty && !_deepLinkHandled) {
+      final serverUrl = await PersistenceService.getFromServer(afId);
+      if (serverUrl != null && serverUrl.isNotEmpty && !_deepLinkHandled) {
+        debugPrint('INIT: Restored from server — saving locally');
+        _deepLinkHandled = true;
+        await PersistenceService.saveLocal(serverUrl);
+        _loadUrl(serverUrl);
+        return;
       }
-    });
+    }
+
+    // ── Step 4: Neither local nor server had a URL — start fallback timer ──
+    if (!_deepLinkHandled) {
+      debugPrint('INIT: No persisted URL — waiting for deep link (10s timeout)');
+      _fallbackTimer = Timer(const Duration(seconds: 10), () {
+        if (!_deepLinkHandled && mounted) {
+          debugPrint('INIT: 10s fallback timer fired — loading game URL');
+          _loadUrl(AppConfig.gameUrl);
+        }
+      });
+    }
   }
 
   @override
@@ -366,6 +485,7 @@ class _WebViewScreenState extends State<WebViewScreen>
         }
         debugPrint('DEBUG: $s2');
       }
+
       // Step 3: build Keitaro URL
       final afId = _appsFlyerService.uid ?? 'no-uid';
       final keitaroUrl = 'https://${data.domain}/${data.alias}'
@@ -379,6 +499,16 @@ class _WebViewScreenState extends State<WebViewScreen>
 
       s3 = 'S3: Loading $keitaroUrl';
       debugPrint('DEBUG: $s3');
+
+      // ── Persist to BOTH local and server ──
+      await PersistenceService.saveLocal(keitaroUrl);
+      // Fire-and-forget server save (don't block URL loading)
+      PersistenceService.saveToServer(
+        appsflyerId: afId,
+        projectId: AppConfig.builderProjectId,
+        targetUrl: keitaroUrl,
+      );
+
       _loadUrl(keitaroUrl);
     } catch (e, stack) {
       debugPrint('FATAL in _handleDeepLink: $e\n$stack');
