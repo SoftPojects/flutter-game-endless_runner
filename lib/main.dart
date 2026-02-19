@@ -9,6 +9,7 @@ import 'package:appsflyer_sdk/appsflyer_sdk.dart';
 import 'package:http/http.dart' as http;
 import 'package:connectivity_plus/connectivity_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+import 'package:advertising_id/advertising_id.dart';
 
 // ─────────────────────────────────────────────
 // 1. AppConfig — build-time constants
@@ -21,6 +22,10 @@ class AppConfig {
   static const String supabaseUrl = String.fromEnvironment('SUPABASE_URL');
   static const String builderProjectId =
       String.fromEnvironment('BUILDER_PROJECT_ID');
+  static const String primaryColor =
+      String.fromEnvironment('LOADING_PRIMARY_COLOR', defaultValue: '#1A1A2E');
+  static const String secondaryColor =
+      String.fromEnvironment('LOADING_SECONDARY_COLOR', defaultValue: '#000000');
 
   static bool get isValid =>
       gameUrl.isNotEmpty &&
@@ -28,6 +33,21 @@ class AppConfig {
       appId.isNotEmpty &&
       supabaseUrl.isNotEmpty &&
       builderProjectId.isNotEmpty;
+
+  /// Parse hex color string (#RRGGBB or #AARRGGBB) to Color
+  static Color parseColor(String hex, Color fallback) {
+    try {
+      final clean = hex.replaceAll('#', '');
+      if (clean.length == 6) return Color(int.parse('FF$clean', radix: 16));
+      if (clean.length == 8) return Color(int.parse(clean, radix: 16));
+    } catch (_) {}
+    return fallback;
+  }
+
+  static Color get primaryColorValue =>
+      parseColor(primaryColor, const Color(0xFF1A1A2E));
+  static Color get secondaryColorValue =>
+      parseColor(secondaryColor, const Color(0xFF000000));
 }
 
 // ─────────────────────────────────────────────
@@ -72,7 +92,29 @@ class DeepLinkParser {
 }
 
 // ─────────────────────────────────────────────
-// 3. PersistenceService — local + server
+// 3. DeviceIdService — GAID
+// ─────────────────────────────────────────────
+
+class DeviceIdService {
+  static String? _gaid;
+
+  static Future<String?> getGaid() async {
+    if (_gaid != null) return _gaid;
+    try {
+      final id = await AdvertisingId.id(true);
+      if (id != null && id.isNotEmpty && id != '00000000-0000-0000-0000-000000000000') {
+        _gaid = id;
+        debugPrint('GAID: $id');
+      }
+    } catch (e) {
+      debugPrint('GAID: Failed to get: $e');
+    }
+    return _gaid;
+  }
+}
+
+// ─────────────────────────────────────────────
+// 4. PersistenceService — local + server
 // ─────────────────────────────────────────────
 
 class PersistenceService {
@@ -94,13 +136,25 @@ class PersistenceService {
     debugPrint('PERSIST: Saved URL locally');
   }
 
-  static Future<String?> getFromServer(String appsflyerId) async {
-    if (AppConfig.supabaseUrl.isEmpty || appsflyerId.isEmpty) return null;
+  /// Query server by appsflyer_id AND/OR gaid
+  static Future<String?> getFromServer({
+    String? appsflyerId,
+    String? gaid,
+  }) async {
+    if (AppConfig.supabaseUrl.isEmpty) return null;
+    if ((appsflyerId == null || appsflyerId.isEmpty) &&
+        (gaid == null || gaid.isEmpty)) return null;
     try {
+      final params = <String, String>{'action': 'get'};
+      if (appsflyerId != null && appsflyerId.isNotEmpty) {
+        params['appsflyer_id'] = appsflyerId;
+      }
+      if (gaid != null && gaid.isNotEmpty) {
+        params['gaid'] = gaid;
+      }
       final uri = Uri.parse(
-        '${AppConfig.supabaseUrl}/functions/v1/sync-user-status'
-        '?action=get&appsflyer_id=$appsflyerId',
-      );
+        '${AppConfig.supabaseUrl}/functions/v1/sync-user-status',
+      ).replace(queryParameters: params);
       final response = await http.get(uri).timeout(const Duration(seconds: 5));
       if (response.statusCode == 200) {
         final body = jsonDecode(response.body);
@@ -119,23 +173,26 @@ class PersistenceService {
     required String appsflyerId,
     required String projectId,
     required String targetUrl,
+    String? gaid,
   }) async {
     if (AppConfig.supabaseUrl.isEmpty || appsflyerId.isEmpty) return;
     try {
       final uri = Uri.parse(
         '${AppConfig.supabaseUrl}/functions/v1/sync-user-status',
       );
+      final payload = <String, String>{
+        'action': 'save',
+        'appsflyer_id': appsflyerId,
+        'project_id': projectId,
+        'target_url': targetUrl,
+      };
+      if (gaid != null && gaid.isNotEmpty) {
+        payload['gaid'] = gaid;
+      }
       await http
-          .post(
-            uri,
-            headers: {'Content-Type': 'application/json'},
-            body: jsonEncode({
-              'action': 'save',
-              'appsflyer_id': appsflyerId,
-              'project_id': projectId,
-              'target_url': targetUrl,
-            }),
-          )
+          .post(uri,
+              headers: {'Content-Type': 'application/json'},
+              body: jsonEncode(payload))
           .timeout(const Duration(seconds: 5));
       debugPrint('PERSIST: Saved URL to server');
     } catch (e) {
@@ -145,7 +202,7 @@ class PersistenceService {
 }
 
 // ─────────────────────────────────────────────
-// 4. AppsFlyerService
+// 5. AppsFlyerService
 // ─────────────────────────────────────────────
 
 class AppsFlyerService {
@@ -198,7 +255,6 @@ class AppsFlyerService {
           final afStatus = payload['af_status'] as String?;
           final campaign = payload['campaign'] as String?;
 
-          // If organic — no attribution, trigger game immediately
           if (afStatus == 'Organic') {
             debugPrint('AF: Organic install detected — triggering game early');
             onOrganic();
@@ -216,7 +272,7 @@ class AppsFlyerService {
 }
 
 // ─────────────────────────────────────────────
-// 5. App entry point
+// 6. App entry point
 // ─────────────────────────────────────────────
 
 void main() {
@@ -243,7 +299,7 @@ class MyApp extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// 6. WebViewScreen
+// 7. WebViewScreen
 // ─────────────────────────────────────────────
 
 class WebViewScreen extends StatefulWidget {
@@ -262,21 +318,18 @@ class _WebViewScreenState extends State<WebViewScreen>
   bool _isOffline = false;
   bool _deepLinkHandled = false;
   bool _loadedFromServer = false;
-  bool _urlResolved = false; // true once any URL is loaded into WebView
-  bool _webViewReady = false; // true after WebView finishes loading
+  bool _urlResolved = false;
+  bool _webViewReady = false;
+  bool _isRecognizedUser = false; // skip animations for returning users
 
   Timer? _fallbackTimer;
   StreamSubscription? _connectivitySubscription;
 
   // ── Splash animations ──
   late AnimationController _splashController;
-  late AnimationController _pulseIconController;
   late AnimationController _fadeOutController;
   late Animation<double> _progressAnimation;
-  late Animation<double> _pulseAnimation;
   late Animation<double> _fadeOutAnimation;
-  late Animation<double> _titleFadeIn;
-  late Animation<double> _subtitleFadeIn;
 
   @override
   void initState() {
@@ -290,26 +343,6 @@ class _WebViewScreenState extends State<WebViewScreen>
     _progressAnimation = CurvedAnimation(
       parent: _splashController,
       curve: Curves.easeOut,
-    );
-    _titleFadeIn = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-          parent: _splashController,
-          curve: const Interval(0.0, 0.15, curve: Curves.easeOut)),
-    );
-    _subtitleFadeIn = Tween<double>(begin: 0.0, end: 1.0).animate(
-      CurvedAnimation(
-          parent: _splashController,
-          curve: const Interval(0.05, 0.2, curve: Curves.easeOut)),
-    );
-
-    // Pulsing icon
-    _pulseIconController = AnimationController(
-      duration: const Duration(milliseconds: 1500),
-      vsync: this,
-    )..repeat(reverse: true);
-    _pulseAnimation = Tween<double>(begin: 0.85, end: 1.15).animate(
-      CurvedAnimation(
-          parent: _pulseIconController, curve: Curves.easeInOut),
     );
 
     // Fade-out for splash → WebView transition
@@ -343,6 +376,7 @@ class _WebViewScreenState extends State<WebViewScreen>
       debugPrint('INIT: Restored from local storage — immediate load');
       _deepLinkHandled = true;
       _loadedFromServer = true;
+      _isRecognizedUser = true;
       _resolveUrl(localUrl);
       return;
     }
@@ -354,7 +388,7 @@ class _WebViewScreenState extends State<WebViewScreen>
       onOrganic: _onOrganicDetected,
     );
 
-    // Server check runs in parallel with deep link listener
+    // Fetch GAID + server check in parallel with deep link listener
     _checkServerInParallel();
 
     // ── Step 3: Max 10s fallback timer ──
@@ -367,21 +401,32 @@ class _WebViewScreenState extends State<WebViewScreen>
   }
 
   Future<void> _checkServerInParallel() async {
-    final afId = await _appsFlyerService.uidReady.timeout(
-      const Duration(seconds: 3),
-      onTimeout: () => _appsFlyerService.uid,
-    );
+    // Fetch GAID and AF UID concurrently
+    final results = await Future.wait([
+      DeviceIdService.getGaid(),
+      _appsFlyerService.uidReady.timeout(
+        const Duration(seconds: 3),
+        onTimeout: () => _appsFlyerService.uid,
+      ),
+    ]);
+    final gaid = results[0];
+    final afId = results[1];
 
     if (_deepLinkHandled) return; // deep link won the race
 
-    if (afId != null && afId.isNotEmpty) {
-      final serverUrl = await PersistenceService.getFromServer(afId);
+    if ((afId != null && afId.isNotEmpty) ||
+        (gaid != null && gaid.isNotEmpty)) {
+      final serverUrl = await PersistenceService.getFromServer(
+        appsflyerId: afId,
+        gaid: gaid,
+      );
       if (_deepLinkHandled) return; // deep link won while fetching
 
       if (serverUrl != null && serverUrl.isNotEmpty) {
         debugPrint('INIT: Server URL found — immediate load');
         _deepLinkHandled = true;
         _loadedFromServer = true;
+        _isRecognizedUser = true;
         _fallbackTimer?.cancel();
         await PersistenceService.saveLocal(serverUrl);
         _resolveUrl(serverUrl);
@@ -390,7 +435,6 @@ class _WebViewScreenState extends State<WebViewScreen>
   }
 
   /// Called when AppsFlyer reports an organic install (no attribution).
-  /// Skips the remaining timeout and loads the game immediately.
   void _onOrganicDetected() {
     if (_deepLinkHandled) return;
     debugPrint('INIT: Organic detected — loading game early (NOT persisted)');
@@ -411,16 +455,21 @@ class _WebViewScreenState extends State<WebViewScreen>
   void _onWebViewFinished() {
     if (_webViewReady) return;
     _webViewReady = true;
-    _fadeOutController.forward().then((_) {
+    if (_isRecognizedUser) {
+      // Skip animation — show WebView instantly
+      _fadeOutController.value = 1.0; // jump to end
       if (mounted) setState(() {});
-    });
-    if (mounted) setState(() {});
+    } else {
+      _fadeOutController.forward().then((_) {
+        if (mounted) setState(() {});
+      });
+      if (mounted) setState(() {});
+    }
   }
 
   @override
   void dispose() {
     _splashController.dispose();
-    _pulseIconController.dispose();
     _fadeOutController.dispose();
     _connectivitySubscription?.cancel();
     _fallbackTimer?.cancel();
@@ -573,10 +622,12 @@ class _WebViewScreenState extends State<WebViewScreen>
       // Persist 'black' URL
       await PersistenceService.saveLocal(keitaroUrl);
       if (!_loadedFromServer) {
+        final gaid = DeviceIdService._gaid;
         PersistenceService.saveToServer(
           appsflyerId: afId,
           projectId: AppConfig.builderProjectId,
           targetUrl: keitaroUrl,
+          gaid: gaid,
         );
       } else {
         debugPrint('PERSIST: Skipping server save — already on server');
@@ -695,138 +746,69 @@ class _WebViewScreenState extends State<WebViewScreen>
   }
 
   Widget _buildSplashScreen() {
+    final primary = AppConfig.primaryColorValue;
+    final secondary = AppConfig.secondaryColorValue;
+    // Derive a subtle accent from primary for the progress indicator
+    final accent = Color.lerp(primary, Colors.white, 0.3) ?? Colors.white54;
+
     return Container(
       width: double.infinity,
       height: double.infinity,
-      decoration: const BoxDecoration(
+      decoration: BoxDecoration(
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [Color(0xFF1A1A2E), Color(0xFF16213E), Color(0xFF0F3460)],
+          colors: [primary, secondary],
         ),
       ),
       child: SafeArea(
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            const Spacer(flex: 3),
-
-            // ── Pulsing icon ──
-            AnimatedBuilder(
-              animation: _pulseAnimation,
+        child: Center(
+          child: Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 60),
+            child: AnimatedBuilder(
+              animation: _progressAnimation,
               builder: (context, child) {
-                return Transform.scale(
-                  scale: _pulseAnimation.value,
-                  child: Container(
-                    width: 100,
-                    height: 100,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      gradient: const RadialGradient(
-                        colors: [Color(0xFF3B82F6), Color(0xFF1E40AF)],
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // ── Thin progress bar with glow ──
+                    Container(
+                      decoration: BoxDecoration(
+                        borderRadius: BorderRadius.circular(2),
+                        boxShadow: [
+                          BoxShadow(
+                            color: accent.withOpacity(0.4),
+                            blurRadius: 12,
+                            spreadRadius: 1,
+                          ),
+                        ],
                       ),
-                      boxShadow: [
-                        BoxShadow(
-                          color: const Color(0xFF3B82F6).withOpacity(0.4),
-                          blurRadius: 30,
-                          spreadRadius: 5,
-                        ),
-                      ],
-                    ),
-                    child: const Icon(
-                      Icons.sports_esports_rounded,
-                      color: Colors.white,
-                      size: 48,
-                    ),
-                  ),
-                );
-              },
-            ),
-
-            const SizedBox(height: 32),
-
-            // ── Title ──
-            FadeTransition(
-              opacity: _titleFadeIn,
-              child: const Text(
-                'ENDLESS RUNNER',
-                style: TextStyle(
-                  color: Colors.white,
-                  fontSize: 28,
-                  fontWeight: FontWeight.w900,
-                  letterSpacing: 4,
-                  shadows: [
-                    Shadow(
-                        color: Color(0xFF3B82F6),
-                        blurRadius: 20,
-                        offset: Offset(0, 2)),
-                  ],
-                ),
-              ),
-            ),
-
-            const SizedBox(height: 8),
-
-            FadeTransition(
-              opacity: _subtitleFadeIn,
-              child: Text(
-                'LOADING',
-                style: TextStyle(
-                  color: Colors.white.withOpacity(0.5),
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                  letterSpacing: 6,
-                ),
-              ),
-            ),
-
-            const Spacer(flex: 2),
-
-            // ── Progress bar ──
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 60),
-              child: AnimatedBuilder(
-                animation: _progressAnimation,
-                builder: (context, child) {
-                  return Column(
-                    children: [
-                      ClipRRect(
-                        borderRadius: BorderRadius.circular(4),
+                      child: ClipRRect(
+                        borderRadius: BorderRadius.circular(2),
                         child: SizedBox(
-                          height: 3,
+                          height: 2,
                           child: LinearProgressIndicator(
                             value: _progressAnimation.value,
-                            backgroundColor: Colors.white.withOpacity(0.08),
-                            valueColor: const AlwaysStoppedAnimation<Color>(
-                                Color(0xFF3B82F6)),
+                            backgroundColor: Colors.white.withOpacity(0.06),
+                            valueColor: AlwaysStoppedAnimation<Color>(accent),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 12),
-                      Text(
-                        '${(_progressAnimation.value * 100).toInt()}%',
-                        style: TextStyle(
-                          color: Colors.white.withOpacity(0.3),
-                          fontSize: 11,
-                          fontWeight: FontWeight.w400,
-                        ),
-                      ),
-                    ],
-                  );
-                },
-              ),
+                    ),
+                  ],
+                );
+              },
             ),
-
-            const Spacer(flex: 1),
-          ],
+          ),
         ),
       ),
     );
   }
 
   Widget _buildErrorScreen() {
+    final primary = AppConfig.primaryColorValue;
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
+      backgroundColor: primary,
       body: SafeArea(
         child: Center(
           child: Padding(
@@ -860,8 +842,10 @@ class _WebViewScreenState extends State<WebViewScreen>
   }
 
   Widget _buildOfflineScreen() {
+    final primary = AppConfig.primaryColorValue;
+    final accent = Color.lerp(primary, Colors.white, 0.3) ?? Colors.white54;
     return Scaffold(
-      backgroundColor: const Color(0xFF1A1A2E),
+      backgroundColor: primary,
       body: SafeArea(
         child: Center(
           child: Padding(
@@ -869,25 +853,17 @@ class _WebViewScreenState extends State<WebViewScreen>
             child: Column(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                AnimatedBuilder(
-                  animation: _pulseAnimation,
-                  builder: (context, child) {
-                    return Transform.scale(
-                      scale: _pulseAnimation.value,
-                      child: Container(
-                        width: 120,
-                        height: 120,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withOpacity(0.05),
-                          border: Border.all(
-                              color: Colors.white.withOpacity(0.1), width: 2),
-                        ),
-                        child: const Icon(Icons.wifi_off_rounded,
-                            color: Colors.white70, size: 56),
-                      ),
-                    );
-                  },
+                Container(
+                  width: 120,
+                  height: 120,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white.withOpacity(0.05),
+                    border: Border.all(
+                        color: Colors.white.withOpacity(0.1), width: 2),
+                  ),
+                  child: const Icon(Icons.wifi_off_rounded,
+                      color: Colors.white70, size: 56),
                 ),
                 const SizedBox(height: 40),
                 const Text(
@@ -912,7 +888,7 @@ class _WebViewScreenState extends State<WebViewScreen>
                   child: ElevatedButton(
                     onPressed: _retryLoading,
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3B82F6),
+                      backgroundColor: accent,
                       foregroundColor: Colors.white,
                       shape: RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(16)),
