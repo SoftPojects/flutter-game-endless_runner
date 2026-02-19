@@ -260,11 +260,22 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     _fallbackTimer?.cancel();
     debugPrint('DEBUG: Fallback timer cancelled — deep link is being handled');
 
+    // Clean the deep link value — remove scheme + slashes (e.g. "myapp://user_dom_alias" → "user_dom_alias")
+    String cleanValue = deepLinkValue;
+    final schemeIdx = cleanValue.indexOf('://');
+    if (schemeIdx != -1) {
+      cleanValue = cleanValue.substring(schemeIdx + 3);
+    }
+    // Also strip any leading/trailing slashes or whitespace
+    cleanValue = cleanValue.replaceAll(RegExp(r'^/+|/+$'), '').trim();
+    debugPrint('DEBUG: Raw="$deepLinkValue" → Clean="$cleanValue"');
+    if (mounted) setState(() => _debugInfo = 'Step 0: Raw=$deepLinkValue\nCleaned=$cleanValue');
+
     try {
-      final data = DeepLinkParser.parse(deepLinkValue);
+      final data = DeepLinkParser.parse(cleanValue);
       if (data == null) {
         debugPrint('Deep link too short (need username_domain_alias), loading GAME_URL');
-        if (mounted) setState(() => _debugInfo = 'ERROR: Deep link parse failed — need username_domain_alias');
+        if (mounted) setState(() => _debugInfo = 'ERROR: Parsing failed for value: $cleanValue');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
@@ -278,7 +289,15 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
       final resolveUrl = '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
       debugPrint('Verifying user: $resolveUrl');
 
-      final response = await http.get(Uri.parse(resolveUrl));
+      late final http.Response response;
+      try {
+        response = await http.get(Uri.parse(resolveUrl));
+      } catch (netErr) {
+        debugPrint('DEBUG: Network error calling resolve-user: $netErr');
+        if (mounted) setState(() => _debugInfo = '$step1\nNETWORK ERROR: $netErr');
+        _loadUrl(AppConfig.gameUrl);
+        return;
+      }
 
       // DEBUG: Print resolve-user response
       debugPrint('DEBUG: resolve-user Status: ${response.statusCode}, Body: ${response.body}');
