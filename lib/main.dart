@@ -173,6 +173,8 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
   bool _isLoading = true;
   bool _isOffline = false;
   bool _deepLinkHandled = false;
+  Timer? _fallbackTimer;
+  String? _debugInfo; // Temporary debug overlay text
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   StreamSubscription? _connectivitySubscription;
@@ -202,8 +204,9 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     );
     _initConnectivityListener();
 
-    Future.delayed(const Duration(seconds: 5), () {
+    _fallbackTimer = Timer(const Duration(seconds: 5), () {
       if (!_deepLinkHandled && mounted) {
+        debugPrint('DEBUG: 5s fallback timer fired — loading game URL');
         _loadUrl(AppConfig.gameUrl);
       }
     });
@@ -213,6 +216,7 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
   void dispose() {
     _pulseController.dispose();
     _connectivitySubscription?.cancel();
+    _fallbackTimer?.cancel();
     super.dispose();
   }
 
@@ -248,6 +252,10 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     if (deepLinkValue.isEmpty || _deepLinkHandled) return;
     _deepLinkHandled = true;
 
+    // CRITICAL: Cancel the 5-second fallback timer so it doesn't race with the network request
+    _fallbackTimer?.cancel();
+    debugPrint('DEBUG: Fallback timer cancelled — deep link is being handled');
+
     try {
       final data = DeepLinkParser.parse(deepLinkValue);
       if (data == null) {
@@ -256,14 +264,21 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
         return;
       }
 
+      // DEBUG: Print parsed deep link data
+      debugPrint('DEBUG: Parsed Username: ${data.username}, Domain: ${data.domain}, Alias: ${data.alias}');
+
       // Authorization check — verify the username exists
       final resolveUrl = '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
       debugPrint('Verifying user: $resolveUrl');
 
       final response = await http.get(Uri.parse(resolveUrl));
 
+      // DEBUG: Print resolve-user response
+      debugPrint('DEBUG: resolve-user Status: ${response.statusCode}, Body: ${response.body}');
+
       if (response.statusCode != 200) {
         debugPrint('resolve-user auth check failed: ${response.statusCode} ${response.body}');
+        if (mounted) setState(() => _debugInfo = 'resolve-user FAILED: ${response.statusCode}');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
@@ -280,7 +295,12 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
           '&sub9=${AppConfig.builderProjectId}'
           '&sub10=$afId';
 
-      debugPrint('Loading Keitaro URL: $keitaroUrl');
+      // DEBUG: Print final Keitaro URL + show on screen
+      debugPrint('DEBUG: Final Keitaro URL: $keitaroUrl');
+      debugPrint('DEBUG: sub9=${AppConfig.builderProjectId}, sub10=$afId');
+      if (mounted) {
+        setState(() => _debugInfo = 'resolve: ${response.statusCode}\nURL: $keitaroUrl');
+      }
       _loadUrl(keitaroUrl);
     } catch (e, stack) {
       debugPrint('Deep link handling error: $e');
@@ -487,6 +507,26 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
             WebViewWidget(controller: _controller),
             if (_isLoading)
               const Center(child: CircularProgressIndicator(color: Colors.white)),
+            // Temporary debug overlay
+            if (_debugInfo != null)
+              Positioned(
+                bottom: 0,
+                left: 0,
+                right: 0,
+                child: GestureDetector(
+                  onTap: () => setState(() => _debugInfo = null),
+                  child: Container(
+                    color: Colors.black.withOpacity(0.85),
+                    padding: const EdgeInsets.all(8),
+                    child: Text(
+                      _debugInfo!,
+                      style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontFamily: 'monospace'),
+                      maxLines: 5,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ),
+                ),
+              ),
           ],
         ),
       ),
