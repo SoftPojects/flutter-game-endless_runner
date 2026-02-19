@@ -172,7 +172,6 @@ class _WebViewScreenState extends State<WebViewScreen>
   bool _isOffline = false;
   bool _deepLinkHandled = false;
   Timer? _fallbackTimer;
-  String? _debugInfo;
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   StreamSubscription? _connectivitySubscription;
@@ -241,7 +240,7 @@ class _WebViewScreenState extends State<WebViewScreen>
     if (result.status == Status.FOUND) {
       final deepLink = result.deepLink;
       if (deepLink == null) {
-        if (mounted) setState(() => _debugInfo = 'DeepLink object is NULL');
+        debugPrint('DeepLink object is NULL');
         return;
       }
 
@@ -256,7 +255,6 @@ class _WebViewScreenState extends State<WebViewScreen>
       final fullDump =
           'deepLinkValue: "$deepLinkValue"\nclickEvent: $clickEvent';
       debugPrint('DEBUG FULL DUMP:\n$fullDump');
-      if (mounted) setState(() => _debugInfo = 'Full Map:\n$fullDump');
 
       String resolvedValue = deepLinkValue;
 
@@ -314,9 +312,7 @@ class _WebViewScreenState extends State<WebViewScreen>
 
       _handleDeepLink(resolvedValue);
     } else {
-      if (mounted) {
-        setState(() => _debugInfo = 'DeepLink status: ${result.status}');
-      }
+      debugPrint('DeepLink status: ${result.status}');
     }
   }
 
@@ -347,7 +343,6 @@ class _WebViewScreenState extends State<WebViewScreen>
         final parts = cleanValue.split('_');
         s1 = 'PARSE FAILED: Got ${parts.length} parts (need >=3): $parts';
         debugPrint('DEBUG: $s1');
-        if (mounted) setState(() => _debugInfo = s1);
         _loadUrl(AppConfig.gameUrl);
         return;
       }
@@ -355,7 +350,6 @@ class _WebViewScreenState extends State<WebViewScreen>
       // Step 1: parsed OK
       s1 = 'S1: user=${data.username} dom=${data.domain} alias=${data.alias} sub2=${data.sub2}';
       debugPrint('DEBUG: $s1');
-      if (mounted) setState(() => _debugInfo = s1);
 
       // Step 2: resolve-user (bypass if missing or error)
       if (AppConfig.supabaseUrl.isEmpty) {
@@ -372,8 +366,6 @@ class _WebViewScreenState extends State<WebViewScreen>
         }
         debugPrint('DEBUG: $s2');
       }
-      if (mounted) setState(() => _debugInfo = '$s1\n$s2');
-
       // Step 3: build Keitaro URL
       final afId = _appsFlyerService.uid ?? 'no-uid';
       final keitaroUrl = 'https://${data.domain}/${data.alias}'
@@ -387,11 +379,9 @@ class _WebViewScreenState extends State<WebViewScreen>
 
       s3 = 'S3: Loading $keitaroUrl';
       debugPrint('DEBUG: $s3');
-      if (mounted) setState(() => _debugInfo = '$s1\n$s2\n$s3');
       _loadUrl(keitaroUrl);
     } catch (e, stack) {
       debugPrint('FATAL in _handleDeepLink: $e\n$stack');
-      if (mounted) setState(() => _debugInfo = 'FATAL: $e\n$s1\n$s2\n$s3');
       FirebaseCrashlytics.instance
           .recordError(e, stack, reason: 'Deep link handling');
       _loadUrl(AppConfig.gameUrl);
@@ -614,28 +604,6 @@ class _WebViewScreenState extends State<WebViewScreen>
             if (_isLoading)
               const Center(
                   child: CircularProgressIndicator(color: Colors.white)),
-            if (_debugInfo != null)
-              Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: GestureDetector(
-                  onTap: () => setState(() => _debugInfo = null),
-                  child: Container(
-                    color: Colors.black.withOpacity(0.85),
-                    padding: const EdgeInsets.all(8),
-                    child: Text(
-                      _debugInfo!,
-                      style: const TextStyle(
-                          color: Colors.greenAccent,
-                          fontSize: 10,
-                          fontFamily: 'monospace'),
-                      maxLines: 6,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
-                ),
-              ),
           ],
         ),
       ),
