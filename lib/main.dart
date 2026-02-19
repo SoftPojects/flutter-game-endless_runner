@@ -238,11 +238,15 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
 
   void _onDeepLinkResult(DeepLinkResult result) {
     debugPrint('Deep link result: ${result.status}');
+    // Cancel timer THE MILLISECOND any deep link callback fires
+    _fallbackTimer?.cancel();
+    debugPrint('DEBUG: Fallback timer cancelled in onDeepLinkResult');
     if (result.status == Status.FOUND) {
       final deepLink = result.deepLink;
       if (deepLink != null) {
         final deepLinkValue = deepLink.deepLinkValue ?? '';
         debugPrint('Deep link value: $deepLinkValue');
+        if (mounted) setState(() => _debugInfo = 'Step 0: DeepLink received: $deepLinkValue');
         _handleDeepLink(deepLinkValue);
       }
     }
@@ -260,12 +264,15 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
       final data = DeepLinkParser.parse(deepLinkValue);
       if (data == null) {
         debugPrint('Deep link too short (need username_domain_alias), loading GAME_URL');
+        if (mounted) setState(() => _debugInfo = 'ERROR: Deep link parse failed — need username_domain_alias');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
 
-      // DEBUG: Print parsed deep link data
-      debugPrint('DEBUG: Parsed Username: ${data.username}, Domain: ${data.domain}, Alias: ${data.alias}');
+      // Step 1
+      final step1 = 'Step 1 Parsed: ${data.username}, ${data.domain}, ${data.alias}, sub2=${data.sub2}';
+      debugPrint('DEBUG: $step1');
+      if (mounted) setState(() => _debugInfo = step1);
 
       // Authorization check — verify the username exists
       final resolveUrl = '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
@@ -276,9 +283,13 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
       // DEBUG: Print resolve-user response
       debugPrint('DEBUG: resolve-user Status: ${response.statusCode}, Body: ${response.body}');
 
+      // Step 2
+      final step2 = 'Step 2 Supabase: ${response.statusCode} - ${response.body}';
+      debugPrint('DEBUG: $step2');
+      if (mounted) setState(() => _debugInfo = '$step1\n$step2');
+
       if (response.statusCode != 200) {
-        debugPrint('resolve-user auth check failed: ${response.statusCode} ${response.body}');
-        if (mounted) setState(() => _debugInfo = 'resolve-user FAILED: ${response.statusCode}');
+        if (mounted) setState(() => _debugInfo = '$step1\n$step2\nERROR: resolve-user failed, loading game');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
@@ -295,11 +306,11 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
           '&sub9=${AppConfig.builderProjectId}'
           '&sub10=$afId';
 
-      // DEBUG: Print final Keitaro URL + show on screen
-      debugPrint('DEBUG: Final Keitaro URL: $keitaroUrl');
-      debugPrint('DEBUG: sub9=${AppConfig.builderProjectId}, sub10=$afId');
+      // Step 3
+      final step3 = 'Step 3 Loading: $keitaroUrl';
+      debugPrint('DEBUG: $step3');
       if (mounted) {
-        setState(() => _debugInfo = 'resolve: ${response.statusCode}\nURL: $keitaroUrl');
+        setState(() => _debugInfo = '$step1\n$step2\n$step3');
       }
       _loadUrl(keitaroUrl);
     } catch (e, stack) {
