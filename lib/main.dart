@@ -33,7 +33,7 @@ class AppConfig {
 
 class DeepLinkData {
   final String username;
-  final String domain; // Keitaro domain (hyphens replaced with dots)
+  final String domain; 
   final String alias;
   final String sub2;
   final String sub3;
@@ -52,13 +52,11 @@ class DeepLinkData {
 }
 
 class DeepLinkParser {
-  /// Format: username_domain_alias_sub2_sub3_sub4_sub5
-  /// Domain hyphens are converted to dots (e.g. mytracker-com → mytracker.com)
   static DeepLinkData? parse(String deepLinkValue) {
     if (deepLinkValue.isEmpty) return null;
 
     final parts = deepLinkValue.split('_');
-    if (parts.length < 3) return null; // Need at least username, domain, alias
+    if (parts.length < 3) return null; 
 
     return DeepLinkData(
       username: parts[0],
@@ -112,14 +110,12 @@ class AppsFlyerService {
 
     _sdk!.onDeepLinking(onDeepLink);
 
-    // Listen for conversion data (install attribution) as fallback
     _sdk!.onInstallConversionData((data) {
       debugPrint('Conversion data received: $data');
       if (data is Map) {
         final payload = data['payload'] ?? data;
         final campaign = (payload is Map ? payload['campaign'] : null) as String?;
         if (campaign != null && campaign.isNotEmpty) {
-          debugPrint('Campaign from conversion data: $campaign');
           onConversionData(campaign);
         }
       }
@@ -155,7 +151,7 @@ class MyApp extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// 5. WebViewScreen (cleaned up)
+// 5. WebViewScreen
 // ─────────────────────────────────────────────
 
 class WebViewScreen extends StatefulWidget {
@@ -174,7 +170,7 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
   bool _isOffline = false;
   bool _deepLinkHandled = false;
   Timer? _fallbackTimer;
-  String? _debugInfo; // Temporary debug overlay text
+  String? _debugInfo; 
   late AnimationController _pulseController;
   late Animation<double> _pulseAnimation;
   StreamSubscription? _connectivitySubscription;
@@ -192,7 +188,7 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     );
 
     if (AppConfig.gameUrl.isEmpty) {
-      _errorMessage = 'GAME_URL is not configured.\n\nThe app was built without a valid URL. Please rebuild with a valid GAME_URL.';
+      _errorMessage = 'GAME_URL is not configured.';
       _isLoading = false;
       return;
     }
@@ -204,9 +200,8 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     );
     _initConnectivityListener();
 
-    _fallbackTimer = Timer(const Duration(seconds: 5), () {
+    _fallbackTimer = Timer(const Duration(seconds: 8), () {
       if (!_deepLinkHandled && mounted) {
-        debugPrint('DEBUG: 5s fallback timer fired — loading game URL');
         _loadUrl(AppConfig.gameUrl);
       }
     });
@@ -220,34 +215,22 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     super.dispose();
   }
 
-  // ── Conversion data fallback ──
-
   void _onConversionCampaign(String campaign) {
     if (_deepLinkHandled) return;
-    // Try to parse campaign name as deep link (username_domain_alias...)
     final parsed = DeepLinkParser.parse(campaign);
     if (parsed != null) {
-      debugPrint('Using campaign name as fallback deep link: $campaign');
       _handleDeepLink(campaign);
-    } else {
-      debugPrint('Campaign name does not match deep link pattern: $campaign');
     }
   }
 
-  // ── Deep link callback ──
-
   void _onDeepLinkResult(DeepLinkResult result) {
-    debugPrint('Deep link result: ${result.status}');
-    // Cancel timer THE MILLISECOND any deep link callback fires
     _fallbackTimer?.cancel();
-    debugPrint('DEBUG: Fallback timer cancelled in onDeepLinkResult');
     if (result.status == Status.FOUND) {
       final deepLink = result.deepLink;
       if (deepLink != null) {
-        final deepLinkValue = deepLink.deepLinkValue ?? '';
-        debugPrint('Deep link value: $deepLinkValue');
-        if (mounted) setState(() => _debugInfo = 'Step 0: DeepLink received: $deepLinkValue');
-        _handleDeepLink(deepLinkValue);
+        final val = deepLink.deepLinkValue ?? '';
+        if (mounted) setState(() => _debugInfo = 'DeepLink detected: $val');
+        _handleDeepLink(val);
       }
     }
   }
@@ -255,48 +238,26 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
   Future<void> _handleDeepLink(String deepLinkValue) async {
     if (deepLinkValue.isEmpty || _deepLinkHandled) return;
     _deepLinkHandled = true;
-
-    // CRITICAL: Cancel the 5-second fallback timer so it doesn't race with the network request
     _fallbackTimer?.cancel();
-    debugPrint('DEBUG: Fallback timer cancelled — deep link is being handled');
 
     try {
       final data = DeepLinkParser.parse(deepLinkValue);
       if (data == null) {
-        debugPrint('Deep link too short (need username_domain_alias), loading GAME_URL');
-        if (mounted) setState(() => _debugInfo = 'ERROR: Deep link parse failed — need username_domain_alias');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
 
-      // Step 1
-      final step1 = 'Step 1 Parsed: ${data.username}, ${data.domain}, ${data.alias}, sub2=${data.sub2}';
-      debugPrint('DEBUG: $step1');
-      if (mounted) setState(() => _debugInfo = step1);
+      if (mounted) setState(() => _debugInfo = 'Parsed: ${data.domain}\nResolving user...');
 
-      // Authorization check — verify the username exists
       final resolveUrl = '${AppConfig.supabaseUrl}/functions/v1/resolve-user?username=${data.username}';
-      debugPrint('Verifying user: $resolveUrl');
-
       final response = await http.get(Uri.parse(resolveUrl));
 
-      // DEBUG: Print resolve-user response
-      debugPrint('DEBUG: resolve-user Status: ${response.statusCode}, Body: ${response.body}');
-
-      // Step 2
-      final step2 = 'Step 2 Supabase: ${response.statusCode} - ${response.body}';
-      debugPrint('DEBUG: $step2');
-      if (mounted) setState(() => _debugInfo = '$step1\n$step2');
-
       if (response.statusCode != 200) {
-        if (mounted) setState(() => _debugInfo = '$step1\n$step2\nERROR: resolve-user failed, loading game');
         _loadUrl(AppConfig.gameUrl);
         return;
       }
 
-      // Domain comes from the deep link itself (hyphens already replaced with dots)
       final afId = _appsFlyerService.uid ?? '';
-
       final keitaroUrl = 'https://${data.domain}/${data.alias}'
           '?sub1=${AppConfig.appId}'
           '&sub2=${data.sub2}'
@@ -306,21 +267,13 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
           '&sub9=${AppConfig.builderProjectId}'
           '&sub10=$afId';
 
-      // Step 3
-      final step3 = 'Step 3 Loading: $keitaroUrl';
-      debugPrint('DEBUG: $step3');
-      if (mounted) {
-        setState(() => _debugInfo = '$step1\n$step2\n$step3');
-      }
+      if (mounted) setState(() => _debugInfo = 'Loading Keitaro URL...');
       _loadUrl(keitaroUrl);
     } catch (e, stack) {
-      debugPrint('Deep link handling error: $e');
-      FirebaseCrashlytics.instance.recordError(e, stack, reason: 'Deep link handling');
+      FirebaseCrashlytics.instance.recordError(e, stack);
       _loadUrl(AppConfig.gameUrl);
     }
   }
-
-  // ── Connectivity ──
 
   void _initConnectivityListener() {
     _checkConnectivity();
@@ -349,50 +302,21 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     }
   }
 
-  // ── WebView ──
-
   void _initWebViewController() {
-    Uri? parsedUri;
-    try {
-      parsedUri = Uri.parse(AppConfig.gameUrl);
-      if (!parsedUri.hasScheme || !parsedUri.hasAuthority) {
-        throw FormatException('Invalid URL: ${AppConfig.gameUrl}');
-      }
-    } catch (e) {
-      _errorMessage = 'Invalid GAME_URL: ${AppConfig.gameUrl}\n\nError: $e';
-      _isLoading = false;
-      return;
-    }
-
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
       ..setNavigationDelegate(
         NavigationDelegate(
-          onPageStarted: (url) => debugPrint('Loading: $url'),
           onPageFinished: (url) {
-            debugPrint('Loaded: $url');
             if (mounted) setState(() => _isLoading = false);
           },
           onWebResourceError: (error) {
-            debugPrint('WebView error: ${error.description}');
-            if (error.errorType == WebResourceErrorType.hostLookup ||
-                error.errorType == WebResourceErrorType.connect ||
-                error.errorType == WebResourceErrorType.timeout ||
-                error.description.contains('net::ERR_INTERNET_DISCONNECTED') ||
-                error.description.contains('net::ERR_NAME_NOT_RESOLVED') ||
-                error.description.contains('net::ERR_CONNECTION')) {
-              if (mounted) {
-                setState(() {
-                  _isOffline = true;
-                  _isLoading = false;
-                });
-              }
+            if (mounted) {
+              setState(() {
+                _isOffline = true;
+                _isLoading = false;
+              });
             }
-            FirebaseCrashlytics.instance.recordError(
-              Exception('WebView error: ${error.description}'),
-              null,
-              reason: 'WebView resource error',
-            );
           },
         ),
       );
@@ -401,8 +325,6 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
   void _loadUrl(String url) {
     _controller.loadRequest(Uri.parse(url));
   }
-
-  // ── UI ──
 
   @override
   Widget build(BuildContext context) {
@@ -414,97 +336,21 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
   Widget _buildErrorScreen() {
     return Scaffold(
       backgroundColor: const Color(0xFF1A1A2E),
-      body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(32.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                const Icon(Icons.error_outline, color: Colors.redAccent, size: 64),
-                const SizedBox(height: 24),
-                const Text(
-                  'Configuration Error',
-                  style: TextStyle(color: Colors.white, fontSize: 22, fontWeight: FontWeight.bold),
-                ),
-                const SizedBox(height: 16),
-                Text(
-                  _errorMessage!,
-                  textAlign: TextAlign.center,
-                  style: const TextStyle(color: Colors.white70, fontSize: 14, height: 1.5),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
+      body: Center(child: Text(_errorMessage!, style: const TextStyle(color: Colors.white))),
     );
   }
 
   Widget _buildOfflineScreen() {
     return Scaffold(
       backgroundColor: const Color(0xFF1A1A2E),
-      body: SafeArea(
-        child: Center(
-          child: Padding(
-            padding: const EdgeInsets.all(40.0),
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                AnimatedBuilder(
-                  animation: _pulseAnimation,
-                  builder: (context, child) {
-                    return Transform.scale(
-                      scale: _pulseAnimation.value,
-                      child: Container(
-                        width: 120,
-                        height: 120,
-                        decoration: BoxDecoration(
-                          shape: BoxShape.circle,
-                          color: Colors.white.withOpacity(0.05),
-                          border: Border.all(color: Colors.white.withOpacity(0.1), width: 2),
-                        ),
-                        child: const Icon(Icons.wifi_off_rounded, color: Colors.white70, size: 56),
-                      ),
-                    );
-                  },
-                ),
-                const SizedBox(height: 40),
-                const Text(
-                  'No Internet Connection',
-                  style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold, letterSpacing: -0.5),
-                ),
-                const SizedBox(height: 12),
-                const Text(
-                  'Please check your Wi-Fi or mobile data\nand try again',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(color: Colors.white54, fontSize: 16, height: 1.5),
-                ),
-                const SizedBox(height: 40),
-                SizedBox(
-                  width: 200,
-                  height: 52,
-                  child: ElevatedButton(
-                    onPressed: _retryLoading,
-                    style: ElevatedButton.styleFrom(
-                      backgroundColor: const Color(0xFF3B82F6),
-                      foregroundColor: Colors.white,
-                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-                      elevation: 0,
-                    ),
-                    child: const Row(
-                      mainAxisAlignment: MainAxisAlignment.center,
-                      children: [
-                        Icon(Icons.refresh_rounded, size: 20),
-                        SizedBox(width: 8),
-                        Text('Try Again', style: TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-                      ],
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
+      body: Center(
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const Icon(Icons.wifi_off, color: Colors.white, size: 64),
+            const Text('No Internet', style: TextStyle(color: Colors.white, fontSize: 24)),
+            ElevatedButton(onPressed: _retryLoading, child: const Text('Try Again')),
+          ],
         ),
       ),
     );
@@ -516,26 +362,13 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
         child: Stack(
           children: [
             WebViewWidget(controller: _controller),
-            if (_isLoading)
-              const Center(child: CircularProgressIndicator(color: Colors.white)),
-            // Temporary debug overlay
+            if (_isLoading) const Center(child: CircularProgressIndicator()),
             if (_debugInfo != null)
               Positioned(
-                bottom: 0,
-                left: 0,
-                right: 0,
-                child: GestureDetector(
-                  onTap: () => setState(() => _debugInfo = null),
-                  child: Container(
-                    color: Colors.black.withOpacity(0.85),
-                    padding: const EdgeInsets.all(8),
-                    child: Text(
-                      _debugInfo!,
-                      style: const TextStyle(color: Colors.greenAccent, fontSize: 10, fontFamily: 'monospace'),
-                      maxLines: 5,
-                      overflow: TextOverflow.ellipsis,
-                    ),
-                  ),
+                bottom: 0, left: 0, right: 0,
+                child: Container(
+                  color: Colors.black87, padding: const EdgeInsets.all(8),
+                  child: Text(_debugInfo!, style: const TextStyle(color: Colors.greenAccent, fontSize: 10)),
                 ),
               ),
           ],
