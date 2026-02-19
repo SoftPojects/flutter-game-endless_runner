@@ -241,14 +241,75 @@ class _WebViewScreenState extends State<WebViewScreen> with SingleTickerProvider
     // Cancel timer THE MILLISECOND any deep link callback fires
     _fallbackTimer?.cancel();
     debugPrint('DEBUG: Fallback timer cancelled in onDeepLinkResult');
+
     if (result.status == Status.FOUND) {
       final deepLink = result.deepLink;
-      if (deepLink != null) {
-        final deepLinkValue = deepLink.deepLinkValue ?? '';
-        debugPrint('Deep link value: $deepLinkValue');
-        if (mounted) setState(() => _debugInfo = 'Step 0: DeepLink received: $deepLinkValue');
-        _handleDeepLink(deepLinkValue);
+      if (deepLink == null) {
+        if (mounted) setState(() => _debugInfo = 'DeepLink object is NULL');
+        return;
       }
+
+      // ── Deep scan: dump everything we can see ──
+      final deepLinkValue = deepLink.deepLinkValue ?? '';
+      String? clickEvent;
+      try {
+        clickEvent = deepLink.clickEvent.toString();
+      } catch (_) {
+        clickEvent = 'clickEvent unavailable';
+      }
+
+      final fullDump = 'deepLinkValue: "$deepLinkValue"\nclickEvent: $clickEvent';
+      debugPrint('DEBUG FULL DUMP:\n$fullDump');
+      if (mounted) setState(() => _debugInfo = 'Full Map:\n$fullDump');
+
+      // ── Smart parsing: try multiple fields ──
+      String resolvedValue = deepLinkValue;
+
+      if (resolvedValue.isEmpty) {
+        // Try common keys inside clickEvent map
+        try {
+          final event = deepLink.clickEvent;
+          if (event is Map) {
+            for (final key in ['deep_link_value', 'link', 'click_http_referrer', 'af_dp', 'deep_link_sub1', 'campaign']) {
+              final v = event[key];
+              if (v != null && v.toString().isNotEmpty) {
+                resolvedValue = v.toString();
+                debugPrint('DEBUG: Found value in clickEvent["$key"]: $resolvedValue');
+                if (mounted) setState(() => _debugInfo = '$fullDump\n\nResolved from key "$key": $resolvedValue');
+                break;
+              }
+            }
+          }
+        } catch (e) {
+          debugPrint('DEBUG: Error scanning clickEvent: $e');
+        }
+      }
+
+      if (resolvedValue.isEmpty) {
+        // Try getStringValue helper
+        for (final key in ['deep_link_value', 'link', 'click_http_referrer', 'af_dp', 'deep_link_sub1']) {
+          try {
+            final v = deepLink.getStringValue(key);
+            if (v != null && v.isNotEmpty) {
+              resolvedValue = v;
+              debugPrint('DEBUG: Found value via getStringValue("$key"): $resolvedValue');
+              if (mounted) setState(() => _debugInfo = '$fullDump\n\nResolved via getString "$key": $resolvedValue');
+              break;
+            }
+          } catch (_) {}
+        }
+      }
+
+      if (resolvedValue.isEmpty) {
+        if (mounted) setState(() => _debugInfo = 'ALL FIELDS EMPTY\n\n$fullDump');
+        debugPrint('DEBUG: All deep link fields empty, falling back to game');
+        _loadUrl(AppConfig.gameUrl);
+        return;
+      }
+
+      _handleDeepLink(resolvedValue);
+    } else {
+      if (mounted) setState(() => _debugInfo = 'DeepLink status: ${result.status}');
     }
   }
 
