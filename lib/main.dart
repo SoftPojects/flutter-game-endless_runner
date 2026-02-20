@@ -219,7 +219,11 @@ class AppsFlyerService {
   String? campaignId;    // sub1 — campaign_id
   String? adsetId;       // sub2 — adset_id
   String? adId;          // sub3 — ad_id
-  String? adName;        // sub4 — campaign (ad name)
+  String? adName;        // sub4 — ad / ad_name / campaign fallback
+
+  /// Completer that resolves as soon as attribution data is mapped.
+  /// Use this to wait for sub1–sub4 before building the Keitaro URL.
+  final Completer<void> attributionCompleter = Completer<void>();
 
   Future<String?> get uidReady => _uidCompleter.future;
 
@@ -231,6 +235,7 @@ class AppsFlyerService {
     if (AppConfig.afDevKey.isEmpty) {
       debugPrint('AF_DEV_KEY not set — skipping AppsFlyer init');
       _uidCompleter.complete(null);
+      if (!attributionCompleter.isCompleted) attributionCompleter.complete();
       return;
     }
 
@@ -270,9 +275,20 @@ class AppsFlyerService {
           campaignId = payload['campaign_id']?.toString() ?? '';
           adsetId    = payload['adset_id']?.toString() ?? payload['af_adset_id']?.toString() ?? '';
           adId       = payload['ad_id']?.toString() ?? payload['af_ad_id']?.toString() ?? '';
-          adName     = payload['ad']?.toString() ?? payload['ad_name']?.toString() ?? '';
+          // sub4: ad name with multi-key fallback
+          adName     = payload['ad']?.toString().isNotEmpty == true
+              ? payload['ad'].toString()
+              : payload['ad_name']?.toString().isNotEmpty == true
+                  ? payload['ad_name'].toString()
+                  : payload['campaign']?.toString() ?? '';
 
           debugPrint('AF Conv: campaign_id=$campaignId adset_id=$adsetId ad_id=$adId ad_name=$adName');
+
+          // Signal that attribution data is ready
+          if (!attributionCompleter.isCompleted) {
+            attributionCompleter.complete();
+            debugPrint('AF: attributionCompleter resolved');
+          }
 
           if (afStatus == 'Organic') {
             debugPrint('AF: Organic install detected — triggering game early');
@@ -349,6 +365,14 @@ class _WebViewScreenState extends State<WebViewScreen>
   bool _webViewReady = false;
   bool _isRecognizedUser = false; // skip animations for returning users
 
+  // For debug tap detection
+  int _debugTapCount = 0;
+  DateTime? _firstDebugTapTime;
+  String? _lastKeitaroUrl;
+  String? _debugSub1, _debugSub2, _debugSub3, _debugSub4;
+  String? _debugSub5, _debugSub6, _debugSub7, _debugSub8;
+  String? _debugSub9, _debugSub10;
+
   Timer? _fallbackTimer;
   StreamSubscription? _connectivitySubscription;
 
@@ -397,10 +421,10 @@ class _WebViewScreenState extends State<WebViewScreen>
   // ─────────────────────────────────────────
 
   Future<void> _startInitSequence() async {
-    // ── Step 1: Local persistence (instant) ──
+    // ── Step 1: Local persistence (instant) — skip attribution wait ──
     final localUrl = await PersistenceService.getLocal();
     if (localUrl != null && localUrl.isNotEmpty) {
-      debugPrint('INIT: Restored from local storage — immediate load');
+      debugPrint('INIT: Restored from local storage — immediate load (no attribution wait)');
       _deepLinkHandled = true;
       _loadedFromServer = true;
       _isRecognizedUser = true;
@@ -599,6 +623,8 @@ class _WebViewScreenState extends State<WebViewScreen>
   }
 
   // ── Handle deep link ──
+  // Waits up to 3s for attribution data (sub1–sub4) before building the URL.
+  // If attribution arrives in 0.5s, proceeds immediately without waiting the full 3s.
 
   Future<void> _handleDeepLink(String deepLinkValue) async {
     try {
@@ -621,6 +647,14 @@ class _WebViewScreenState extends State<WebViewScreen>
 
       debugPrint(
           'DEBUG: S1: user=${data.username} dom=${data.domain} alias=${data.alias}');
+
+      // ── Smart wait: up to 3s for attribution data (sub1–sub4) ──
+      // If data already arrived, this completes instantly.
+      debugPrint('AF: Waiting for attributionCompleter (max 3s)...');
+      await _appsFlyerService.attributionCompleter.future
+          .timeout(const Duration(seconds: 3), onTimeout: () {
+        debugPrint('AF: attributionCompleter timed out after 3s — proceeding with empty subs');
+      });
 
       // resolve-user (bypass on error)
       if (AppConfig.supabaseUrl.isNotEmpty) {
@@ -657,10 +691,16 @@ class _WebViewScreenState extends State<WebViewScreen>
           '&sub10=$afId';
 
       debugPrint('AF subs: sub1=$sub1 sub2=$sub2 sub3=$sub3 sub4=$sub4');
-
+      debugPrint('DL subs: sub5=${data.sub5} sub6=${data.sub6} sub7=${data.sub7} sub8=${data.sub8}');
       debugPrint('DEBUG: S3: Loading $keitaroUrl');
 
-      // Persist 'black' URL
+      // Store debug values for hidden inspector
+      _lastKeitaroUrl = keitaroUrl;
+      _debugSub1 = sub1; _debugSub2 = sub2; _debugSub3 = sub3; _debugSub4 = sub4;
+      _debugSub5 = data.sub5; _debugSub6 = data.sub6; _debugSub7 = data.sub7; _debugSub8 = data.sub8;
+      _debugSub9 = AppConfig.builderProjectId; _debugSub10 = afId;
+
+      // Persist URL
       await PersistenceService.saveLocal(keitaroUrl);
       if (!_loadedFromServer) {
         final gaid = DeviceIdService._gaid;
@@ -681,6 +721,81 @@ class _WebViewScreenState extends State<WebViewScreen>
           .recordError(e, stack, reason: 'Deep link handling');
       _resolveUrl(AppConfig.gameUrl);
     }
+  }
+
+  // ── Hidden debug inspector (5 taps within 2 seconds) ──
+
+  void _onDebugTap() {
+    final now = DateTime.now();
+    if (_firstDebugTapTime == null ||
+        now.difference(_firstDebugTapTime!).inSeconds >= 2) {
+      _firstDebugTapTime = now;
+      _debugTapCount = 1;
+    } else {
+      _debugTapCount++;
+    }
+
+    if (_debugTapCount >= 5) {
+      _debugTapCount = 0;
+      _firstDebugTapTime = null;
+      _showDebugDialog();
+    }
+  }
+
+  void _showDebugDialog() {
+    if (!mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('🔍 Debug Info', style: TextStyle(fontWeight: FontWeight.bold)),
+        content: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _debugRow('Full Keitaro URL', _lastKeitaroUrl ?? '—'),
+              const Divider(),
+              _debugRow('sub1 (campaign_id)', _debugSub1 ?? '—'),
+              _debugRow('sub2 (adset_id)', _debugSub2 ?? '—'),
+              _debugRow('sub3 (ad_id)', _debugSub3 ?? '—'),
+              _debugRow('sub4 (ad_name)', _debugSub4 ?? '—'),
+              _debugRow('sub5 (DL seg 3)', _debugSub5 ?? '—'),
+              _debugRow('sub6 (DL seg 4)', _debugSub6 ?? '—'),
+              _debugRow('sub7 (DL seg 5)', _debugSub7 ?? '—'),
+              _debugRow('sub8 (DL seg 6)', _debugSub8 ?? '—'),
+              _debugRow('sub9 (project_id)', _debugSub9 ?? '—'),
+              _debugRow('sub10 (af_uid)', _debugSub10 ?? '—'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Close'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _debugRow(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+          Text(
+            value.isEmpty ? '(empty)' : value,
+            style: TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w600,
+              color: value.isEmpty ? Colors.red : Colors.black87,
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   // ── Connectivity ──
@@ -767,21 +882,26 @@ class _WebViewScreenState extends State<WebViewScreen>
     if (_isOffline) return _buildOfflineScreen();
 
     return Scaffold(
-      body: Stack(
-        children: [
-          // WebView is always underneath
-          if (_urlResolved)
-            Positioned.fill(
-              child: SafeArea(child: WebViewWidget(controller: _controller)),
-            ),
+      body: GestureDetector(
+        // Hidden 5-tap debug inspector — works on both splash and WebView
+        onTap: _onDebugTap,
+        behavior: HitTestBehavior.translucent,
+        child: Stack(
+          children: [
+            // WebView is always underneath
+            if (_urlResolved)
+              Positioned.fill(
+                child: SafeArea(child: WebViewWidget(controller: _controller)),
+              ),
 
-          // Splash overlay — fades out after WebView finishes loading
-          if (!_webViewReady || _fadeOutController.isAnimating)
-            FadeTransition(
-              opacity: _fadeOutAnimation,
-              child: _buildSplashScreen(),
-            ),
-        ],
+            // Splash overlay — fades out after WebView finishes loading
+            if (!_webViewReady || _fadeOutController.isAnimating)
+              FadeTransition(
+                opacity: _fadeOutAnimation,
+                child: _buildSplashScreen(),
+              ),
+          ],
+        ),
       ),
     );
   }
