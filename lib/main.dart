@@ -62,19 +62,20 @@ class DeepLinkData {
   final String username;
   final String domain;
   final String alias;
-  final String sub2;
-  final String sub3;
-  final String sub4;
+  // sub5–sub8 come from deep link parts[3]–parts[6]
   final String sub5;
+  final String sub6;
+  final String sub7;
+  final String sub8;
 
   const DeepLinkData({
     required this.username,
     required this.domain,
     required this.alias,
-    this.sub2 = '',
-    this.sub3 = '',
-    this.sub4 = '',
     this.sub5 = '',
+    this.sub6 = '',
+    this.sub7 = '',
+    this.sub8 = '',
   });
 }
 
@@ -87,10 +88,10 @@ class DeepLinkParser {
       username: parts[0],
       domain: parts[1].replaceAll('-', '.'),
       alias: parts[2],
-      sub2: parts.length > 3 ? parts[3] : '',
-      sub3: parts.length > 4 ? parts[4] : '',
-      sub4: parts.length > 5 ? parts[5] : '',
-      sub5: parts.length > 6 ? parts[6] : '',
+      sub5: parts.length > 3 ? parts[3] : '',
+      sub6: parts.length > 4 ? parts[4] : '',
+      sub7: parts.length > 5 ? parts[5] : '',
+      sub8: parts.length > 6 ? parts[6] : '',
     );
   }
 }
@@ -214,6 +215,12 @@ class AppsFlyerService {
   String? uid;
   final Completer<String?> _uidCompleter = Completer<String?>();
 
+  // Conversion data from Facebook via AppsFlyer (sub1–sub4)
+  String? campaignId;    // sub1 — campaign_id
+  String? adsetId;       // sub2 — adset_id
+  String? adId;          // sub3 — ad_id
+  String? adName;        // sub4 — campaign (ad name)
+
   Future<String?> get uidReady => _uidCompleter.future;
 
   Future<void> init({
@@ -258,6 +265,14 @@ class AppsFlyerService {
         if (payload is Map) {
           final afStatus = payload['af_status'] as String?;
           final campaign = payload['campaign'] as String?;
+
+          // Store Facebook attribution sub-params (sub1–sub4)
+          campaignId = payload['campaign_id']?.toString() ?? '';
+          adsetId    = payload['adset_id']?.toString() ?? payload['af_adset_id']?.toString() ?? '';
+          adId       = payload['ad_id']?.toString() ?? payload['af_ad_id']?.toString() ?? '';
+          adName     = payload['campaign']?.toString() ?? '';
+
+          debugPrint('AF Conv: campaign_id=$campaignId adset_id=$adsetId ad_id=$adId ad_name=$adName');
 
           if (afStatus == 'Organic') {
             debugPrint('AF: Organic install detected — triggering game early');
@@ -619,15 +634,29 @@ class _WebViewScreenState extends State<WebViewScreen>
       }
 
       // Build Keitaro URL
+      // sub1–sub4: from Facebook via AppsFlyer conversion data
+      // sub5–sub8: from deep link string (parts[3]–parts[6])
+      // sub9: internal Builder Project ID
+      // sub10: device AppsFlyer UID
       final afId = _appsFlyerService.uid ?? 'no-uid';
+      final sub1 = _appsFlyerService.campaignId ?? '';
+      final sub2 = _appsFlyerService.adsetId ?? '';
+      final sub3 = _appsFlyerService.adId ?? '';
+      final sub4 = _appsFlyerService.adName ?? '';
+
       final keitaroUrl = 'https://${data.domain}/${data.alias}'
-          '?sub1=${AppConfig.appId}'
-          '&sub2=${data.sub2}'
-          '&sub3=${data.sub3}'
-          '&sub4=${data.sub4}'
+          '?sub1=$sub1'
+          '&sub2=$sub2'
+          '&sub3=$sub3'
+          '&sub4=$sub4'
           '&sub5=${data.sub5}'
+          '&sub6=${data.sub6}'
+          '&sub7=${data.sub7}'
+          '&sub8=${data.sub8}'
           '&sub9=${AppConfig.builderProjectId}'
           '&sub10=$afId';
+
+      debugPrint('AF subs: sub1=$sub1 sub2=$sub2 sub3=$sub3 sub4=$sub4');
 
       debugPrint('DEBUG: S3: Loading $keitaroUrl');
 
