@@ -100,14 +100,50 @@ workflows:
             echo "Package ID set to: $APP_PACKAGE_ID (MainActivity pinned to $ORIGINAL_NS.MainActivity)"
           fi
 
-      # 4. Inject google-services.json for Firebase
+      # 4. Inject google-services.json for Firebase (only if enabled)
       - name: Set up Firebase config
         script: |
-          if [ -n "$GOOGLE_SERVICES_JSON" ]; then
-            echo "$GOOGLE_SERVICES_JSON" | base64 -D > android/app/google-services.json
-            echo "google-services.json injected"
+          if [ "$APP_USE_FIREBASE" = "true" ]; then
+            if [ -n "$GOOGLE_SERVICES_JSON" ]; then
+              echo "$GOOGLE_SERVICES_JSON" | base64 -D > android/app/google-services.json
+              echo "google-services.json injected"
+            else
+              echo "Warning: APP_USE_FIREBASE=true but GOOGLE_SERVICES_JSON not set — Firebase features will not work"
+            fi
           else
-            echo "Warning: GOOGLE_SERVICES_JSON not set — Firebase features will not work"
+            echo "APP_USE_FIREBASE=false — disabling Firebase Gradle plugins"
+
+            # Comment out Firebase plugins in app-level build.gradle.kts
+            APP_GRADLE="android/app/build.gradle.kts"
+            if [ -f "$APP_GRADLE" ]; then
+              sed -i '' 's|id("com.google.gms.google-services")|//id("com.google.gms.google-services") /* firebase disabled */|g' "$APP_GRADLE"
+              sed -i '' 's|id("com.google.firebase.crashlytics")|//id("com.google.firebase.crashlytics") /* firebase disabled */|g' "$APP_GRADLE"
+              echo "Commented out Firebase app plugins in $APP_GRADLE"
+            fi
+
+            # Comment out Firebase classpath in project-level build.gradle.kts
+            PROJ_GRADLE="android/build.gradle.kts"
+            if [ -f "$PROJ_GRADLE" ]; then
+              sed -i '' 's|.*com.google.gms:google-services.*|// firebase disabled: &|g' "$PROJ_GRADLE"
+              sed -i '' 's|.*com.google.firebase:firebase-crashlytics-gradle.*|// firebase disabled: &|g' "$PROJ_GRADLE"
+              echo "Commented out Firebase classpath entries in $PROJ_GRADLE"
+            fi
+
+            # Fallback: check root build.gradle (Groovy syntax)
+            ROOT_GRADLE="android/build.gradle"
+            if [ -f "$ROOT_GRADLE" ]; then
+              sed -i '' 's|.*com.google.gms:google-services.*|// firebase disabled: &|g' "$ROOT_GRADLE"
+              sed -i '' 's|.*com.google.firebase:firebase-crashlytics-gradle.*|// firebase disabled: &|g' "$ROOT_GRADLE"
+              echo "Commented out Firebase classpath entries in $ROOT_GRADLE"
+            fi
+
+            # Check app/build.gradle (Groovy syntax)
+            APP_GRADLE_GROOVY="android/app/build.gradle"
+            if [ -f "$APP_GRADLE_GROOVY" ]; then
+              sed -i '' "s|apply plugin: 'com.google.gms.google-services'|// firebase disabled: apply plugin: 'com.google.gms.google-services'|g" "$APP_GRADLE_GROOVY"
+              sed -i '' "s|apply plugin: 'com.google.firebase.crashlytics'|// firebase disabled: apply plugin: 'com.google.firebase.crashlytics'|g" "$APP_GRADLE_GROOVY"
+              echo "Commented out Firebase app plugins in $APP_GRADLE_GROOVY"
+            fi
           fi
 
       # 5. Patch deep link URI scheme in AndroidManifest.xml
@@ -154,6 +190,9 @@ workflows:
           [ -n "$SUPABASE_URL" ] && DART_DEFINES="$DART_DEFINES --dart-define=SUPABASE_URL=$SUPABASE_URL"
           [ -n "$APP_PACKAGE_ID" ] && DART_DEFINES="$DART_DEFINES --dart-define=APP_PACKAGE_ID=$APP_PACKAGE_ID"
           [ -n "$BUILDER_PROJECT_ID" ] && DART_DEFINES="$DART_DEFINES --dart-define=BUILDER_PROJECT_ID=$BUILDER_PROJECT_ID"
+          [ -n "$LOADING_PRIMARY_COLOR" ] && DART_DEFINES="$DART_DEFINES --dart-define=LOADING_PRIMARY_COLOR=$LOADING_PRIMARY_COLOR"
+          [ -n "$LOADING_SECONDARY_COLOR" ] && DART_DEFINES="$DART_DEFINES --dart-define=LOADING_SECONDARY_COLOR=$LOADING_SECONDARY_COLOR"
+          DART_DEFINES="$DART_DEFINES --dart-define=APP_USE_FIREBASE=${APP_USE_FIREBASE:-true}"
 
           # Always build release APK
           flutter build apk $DART_DEFINES --release --build-name="${APP_VERSION_NAME:-1.0.0}" --build-number="${APP_VERSION_CODE:-1}"
