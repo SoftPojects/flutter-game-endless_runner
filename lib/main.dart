@@ -270,7 +270,7 @@ class AppsFlyerService {
           campaignId = payload['campaign_id']?.toString() ?? '';
           adsetId    = payload['adset_id']?.toString() ?? payload['af_adset_id']?.toString() ?? '';
           adId       = payload['ad_id']?.toString() ?? payload['af_ad_id']?.toString() ?? '';
-          adName     = payload['campaign']?.toString() ?? '';
+          adName     = payload['ad']?.toString() ?? payload['ad_name']?.toString() ?? '';
 
           debugPrint('AF Conv: campaign_id=$campaignId adset_id=$adsetId ad_id=$adId ad_name=$adName');
 
