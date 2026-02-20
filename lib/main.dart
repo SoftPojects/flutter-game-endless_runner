@@ -27,6 +27,10 @@ class AppConfig {
   static const String secondaryColor =
       String.fromEnvironment('LOADING_SECONDARY_COLOR', defaultValue: '#000000');
 
+  /// Firebase is enabled only when explicitly set to "true" at build time.
+  static const bool useFirebase =
+      String.fromEnvironment('APP_USE_FIREBASE', defaultValue: 'true') == 'true';
+
   static bool get isValid =>
       gameUrl.isNotEmpty &&
       afDevKey.isNotEmpty &&
@@ -276,14 +280,22 @@ class AppsFlyerService {
 // ─────────────────────────────────────────────
 
 void main() {
-  runZonedGuarded<Future<void>>(() async {
+  if (AppConfig.useFirebase) {
+    // Firebase-enabled path: use Crashlytics for error capture
+    runZonedGuarded<Future<void>>(() async {
+      WidgetsFlutterBinding.ensureInitialized();
+      await Firebase.initializeApp();
+      FlutterError.onError =
+          FirebaseCrashlytics.instance.recordFlutterFatalError;
+      runApp(const MyApp());
+    }, (error, stack) {
+      FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
+    });
+  } else {
+    // Firebase-disabled path: plain launch, no Crashlytics dependency
     WidgetsFlutterBinding.ensureInitialized();
-    await Firebase.initializeApp();
-    FlutterError.onError = FirebaseCrashlytics.instance.recordFlutterFatalError;
     runApp(const MyApp());
-  }, (error, stack) {
-    FirebaseCrashlytics.instance.recordError(error, stack, fatal: true);
-  });
+  }
 }
 
 class MyApp extends StatelessWidget {
