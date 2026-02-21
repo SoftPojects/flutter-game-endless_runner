@@ -379,6 +379,9 @@ class _WebViewScreenState extends State<WebViewScreen>
   String _debugSub5 = 'N/A', _debugSub6 = 'N/A', _debugSub7 = 'N/A', _debugSub8 = 'N/A';
   String _debugSub9 = 'N/A', _debugSub10 = 'N/A';
   String _rawAfData = 'N/A';
+  String _deepLinkStatus = 'Waiting...';
+  String _conversionDataStatus = 'Waiting...';
+  String _afUidStatus = 'Waiting...';
 
   Timer? _fallbackTimer;
   StreamSubscription? _connectivitySubscription;
@@ -445,6 +448,26 @@ class _WebViewScreenState extends State<WebViewScreen>
       onConversionData: _onConversionCampaign,
       onOrganic: _onOrganicDetected,
     );
+
+    // Listen for AF UID and update sub10 + debug as soon as available
+    _appsFlyerService.uidReady.then((id) {
+      if (mounted) {
+        setState(() {
+          _afUidStatus = id ?? 'null';
+          _debugSub10 = id ?? 'no-uid';
+        });
+      }
+    });
+
+    // Listen for conversion data status
+    _appsFlyerService.attributionCompleter.future.then((_) {
+      if (mounted) {
+        setState(() {
+          _conversionDataStatus = '✅ Received';
+          _rawAfData = _appsFlyerService.rawConversionData ?? 'No data';
+        });
+      }
+    });
 
     // Fetch GAID + server check in parallel with deep link listener
     _checkServerInParallel();
@@ -551,6 +574,9 @@ class _WebViewScreenState extends State<WebViewScreen>
 
   void _onDeepLinkResult(DeepLinkResult result) {
     debugPrint('Deep link result: ${result.status}');
+    if (mounted) {
+      setState(() => _deepLinkStatus = result.status.toString());
+    }
     _fallbackTimer?.cancel();
 
     if (result.status == Status.FOUND) {
@@ -782,7 +808,12 @@ class _WebViewScreenState extends State<WebViewScreen>
               _debugRow('Env AF Dev Key', AppConfig.afDevKey.isEmpty ? '⚠️ MISSING' : '✅ Set'),
               _debugRow('Env App ID', AppConfig.appId.isEmpty ? '⚠️ MISSING' : AppConfig.appId),
               const Divider(),
-              _debugRow('Raw AF Data', _rawAfData),
+              const Text('SDK State', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              _debugRow('AF UID', _afUidStatus),
+              _debugRow('Deep Link Status', _deepLinkStatus),
+              _debugRow('Conversion Status', _conversionDataStatus),
+              const Divider(),
+              _debugRow('Raw AF Data (first 100 chars)', _rawAfData.length > 100 ? _rawAfData.substring(0, 100) : _rawAfData),
             ],
           ),
         ),
