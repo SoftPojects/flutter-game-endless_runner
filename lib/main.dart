@@ -102,29 +102,35 @@ class DeepLinkParser {
 
 class DeviceIdService {
   static String? _gaid;
-  static bool _fetched = false;
+  static String? _lastError; // Store error type for debug display
 
-  static Future<String?> getGaid() async {
-    if (_fetched) return _gaid;
-    _fetched = true;
+  /// Force-fetch GAID, bypassing cache. Use for retries.
+  static Future<String?> getGaid({bool forceRefresh = false}) async {
+    if (!forceRefresh && _gaid != null) return _gaid;
     try {
+      _lastError = null;
       final id = await AdvertisingId.id(true);
       if (id != null && id.isNotEmpty) {
         if (id == '00000000-0000-0000-0000-000000000000') {
           debugPrint('GAID: ⚠️ All zeros — AD_ID permission missing or tracking limited');
-          _gaid = id; // Still store it so debug can show the warning
+          _gaid = id;
         } else {
           _gaid = id;
           debugPrint('GAID: $id');
         }
       } else {
+        _lastError = 'Returned null/empty (permission not granted?)';
         debugPrint('GAID: null or empty — permission likely missing');
       }
     } catch (e) {
-      debugPrint('GAID: Failed to get: $e');
+      _lastError = '${e.runtimeType}: $e';
+      debugPrint('GAID: Failed to get: $e (type: ${e.runtimeType})');
     }
     return _gaid;
   }
+
+  /// Get the last error message for debug display
+  static String? get lastError => _lastError;
 }
 
 // ─────────────────────────────────────────────
@@ -431,20 +437,8 @@ class _WebViewScreenState extends State<WebViewScreen>
   void initState() {
     super.initState();
 
-    // ── GAID: Fetch at the VERY START so it's available for debug ──
-    DeviceIdService.getGaid().then((gaid) {
-      if (mounted) {
-        setState(() {
-          if (gaid == null || gaid.isEmpty) {
-            _debugGaid = '⚠️ NULL (permission missing?)';
-          } else if (gaid == '00000000-0000-0000-0000-000000000000') {
-            _debugGaid = '⚠️ $gaid (tracking limited / permission missing)';
-          } else {
-            _debugGaid = gaid;
-          }
-        });
-      }
-    });
+    // ── GAID: Fetch with retries at 0s, 0.5s, and 2s ──
+    _fetchGaidWithRetries();
 
     // Progress bar fills over 10s (matches max timeout)
     _splashController = AnimationController(
@@ -474,6 +468,39 @@ class _WebViewScreenState extends State<WebViewScreen>
     _initWebViewController();
     _startInitSequence();
     _initConnectivityListener();
+  }
+
+  // ── GAID retry logic ──
+  Future<void> _fetchGaidWithRetries() async {
+    // Attempt 1: immediate
+    await _fetchAndSetGaid();
+    // Attempt 2: after 500ms (Android may need time to bind ad service)
+    if (_debugGaid.startsWith('⚠️') || _debugGaid == 'N/A') {
+      await Future.delayed(const Duration(milliseconds: 500));
+      await _fetchAndSetGaid(forceRefresh: true);
+    }
+    // Attempt 3: after 2s (last resort)
+    if (_debugGaid.startsWith('⚠️') || _debugGaid == 'N/A') {
+      await Future.delayed(const Duration(seconds: 2));
+      await _fetchAndSetGaid(forceRefresh: true);
+    }
+  }
+
+  Future<void> _fetchAndSetGaid({bool forceRefresh = false}) async {
+    final gaid = await DeviceIdService.getGaid(forceRefresh: forceRefresh);
+    if (!mounted) return;
+    setState(() {
+      if (gaid == null || gaid.isEmpty) {
+        final err = DeviceIdService.lastError;
+        _debugGaid = err != null
+            ? '⚠️ NULL — Error: $err'
+            : '⚠️ NULL (permission missing?)';
+      } else if (gaid == '00000000-0000-0000-0000-000000000000') {
+        _debugGaid = '⚠️ $gaid (tracking limited / permission missing)';
+      } else {
+        _debugGaid = gaid;
+      }
+    });
   }
 
   // ─────────────────────────────────────────
@@ -985,6 +1012,29 @@ class _WebViewScreenState extends State<WebViewScreen>
           ),
         ),
         actions: [
+          TextButton(
+            onPressed: () async {
+              // Manual refresh: re-fetch AF UID + GAID + attribution state
+              final afUid = await _appsFlyerService._sdk?.getAppsFlyerUID();
+              await _fetchAndSetGaid(forceRefresh: true);
+              if (mounted) {
+                setState(() {
+                  _afUidStatus = afUid ?? _appsFlyerService.uid ?? 'null';
+                  _debugSub10 = afUid ?? _appsFlyerService.uid ?? 'no-uid';
+                  _debugAfStatus = _appsFlyerService.afStatusValue;
+                  _rawAfData = _appsFlyerService.rawConversionData ?? 'Still waiting...';
+                  _debugSub1 = _appsFlyerService.campaignId ?? 'N/A';
+                  _debugSub2 = _appsFlyerService.adsetId ?? 'N/A';
+                  _debugSub3 = _appsFlyerService.adId ?? 'N/A';
+                  _debugSub4 = _appsFlyerService.adName ?? 'N/A';
+                });
+              }
+              // Close and re-open to show updated values
+              Navigator.of(ctx).pop();
+              _showDebugDialog();
+            },
+            child: const Text('🔄 Refresh AF'),
+          ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(),
             child: const Text('Close'),
