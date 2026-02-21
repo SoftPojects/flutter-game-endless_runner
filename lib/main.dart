@@ -379,6 +379,10 @@ class _WebViewScreenState extends State<WebViewScreen>
   bool _webViewReady = false;
   bool _isRecognizedUser = false; // skip animations for returning users
 
+  // Stored deep link data for late-attribution rebuild
+  DeepLinkData? _pendingDeepLinkData;
+  bool _attributionWasEmpty = false; // true if URL was built without attribution
+
   // Debug variables — class-level so they're always accessible
   int _debugTapCount = 0;
   DateTime? _firstDebugTapTime;
@@ -387,8 +391,8 @@ class _WebViewScreenState extends State<WebViewScreen>
   String _debugSub5 = 'N/A', _debugSub6 = 'N/A', _debugSub7 = 'N/A', _debugSub8 = 'N/A';
   String _debugSub9 = 'N/A', _debugSub10 = 'N/A';
   String _debugGaid = 'N/A';
-  String _rawAfData = 'N/A';
-  String _debugAfStatus = 'N/A';
+  String _rawAfData = 'Waiting for AF...';
+  String _debugAfStatus = 'Waiting for AF...';
   String _deepLinkStatus = 'Waiting...';
   String _conversionDataStatus = 'Waiting...';
   String _afUidStatus = 'Waiting...';
@@ -469,19 +473,24 @@ class _WebViewScreenState extends State<WebViewScreen>
       }
     });
 
-    // Listen for conversion data status
+    // Listen for conversion data status — and REBUILD URL if it arrived late
     _appsFlyerService.attributionCompleter.future.then((_) {
       if (mounted) {
         setState(() {
           _conversionDataStatus = '✅ Received';
           _rawAfData = _appsFlyerService.rawConversionData ?? 'No data';
           _debugAfStatus = _appsFlyerService.afStatusValue;
-          // Update sub1-sub4 from conversion data as soon as it arrives
           _debugSub1 = _appsFlyerService.campaignId ?? 'N/A';
           _debugSub2 = _appsFlyerService.adsetId ?? 'N/A';
           _debugSub3 = _appsFlyerService.adId ?? 'N/A';
           _debugSub4 = _appsFlyerService.adName ?? 'N/A';
         });
+      }
+      // ── LATE ATTRIBUTION REBUILD ──
+      // If the URL was already built with empty subs, rebuild it now
+      if (_attributionWasEmpty && _pendingDeepLinkData != null) {
+        debugPrint('AF: Attribution arrived LATE — rebuilding Keitaro URL');
+        _rebuildKeitaroUrl(_pendingDeepLinkData!);
       }
     });
 
@@ -679,8 +688,9 @@ class _WebViewScreenState extends State<WebViewScreen>
   }
 
   // ── Handle deep link ──
-  // Waits up to 3s for attribution data (sub1–sub4) before building the URL.
-  // If attribution arrives in 0.5s, proceeds immediately without waiting the full 3s.
+  // STRICT SYNC: For first-time users, MUST await attribution data (up to 5s)
+  // before building the Keitaro URL. If attribution times out, build with empty
+  // subs but mark for late rebuild.
 
   Future<void> _handleDeepLink(String deepLinkValue) async {
     try {
@@ -701,16 +711,26 @@ class _WebViewScreenState extends State<WebViewScreen>
         return;
       }
 
+      // Store for potential late-attribution rebuild
+      _pendingDeepLinkData = data;
+
       debugPrint(
           'DEBUG: S1: user=${data.username} dom=${data.domain} alias=${data.alias}');
 
-      // ── Smart wait: up to 5s for attribution data (sub1–sub4) ──
+      // ── STRICT SYNC: Wait up to 5s for attribution data (sub1–sub4) ──
+      // For first-time users this is MANDATORY to avoid empty subs.
       // If data already arrived, this completes instantly.
-      debugPrint('AF: Waiting for attributionCompleter (max 5s)...');
+      debugPrint('AF: STRICT WAIT for attributionCompleter (max 5s)...');
+      bool attributionTimedOut = false;
       await _appsFlyerService.attributionCompleter.future
           .timeout(const Duration(seconds: 5), onTimeout: () {
-        debugPrint('AF: attributionCompleter timed out after 5s — proceeding with empty subs');
+        attributionTimedOut = true;
+        debugPrint('AF: ⚠️ attributionCompleter TIMED OUT after 5s — proceeding with empty subs');
       });
+
+      if (!attributionTimedOut) {
+        debugPrint('AF: ✅ Attribution data received BEFORE timeout');
+      }
 
       // resolve-user (bypass on error)
       if (AppConfig.supabaseUrl.isNotEmpty) {
@@ -723,50 +743,27 @@ class _WebViewScreenState extends State<WebViewScreen>
         }
       }
 
-      // Build Keitaro URL
-      // sub1–sub4: from Facebook via AppsFlyer conversion data
-      // sub5–sub8: from deep link string (parts[3]–parts[6])
-      // sub9: internal Builder Project ID
-      // sub10: device AppsFlyer UID
-      final afId = _appsFlyerService.uid ?? 'no-uid';
+      // Build Keitaro URL with whatever attribution data is available
+      final keitaroUrl = _buildKeitaroUrl(data);
+
+      // Track if we built with empty attribution (for late rebuild)
       final sub1 = _appsFlyerService.campaignId ?? '';
       final sub2 = _appsFlyerService.adsetId ?? '';
       final sub3 = _appsFlyerService.adId ?? '';
       final sub4 = _appsFlyerService.adName ?? '';
+      _attributionWasEmpty = sub1.isEmpty && sub2.isEmpty && sub3.isEmpty && sub4.isEmpty;
 
-      final keitaroUrl = 'https://${data.domain}/${data.alias}'
-          '?sub1=$sub1'
-          '&sub2=$sub2'
-          '&sub3=$sub3'
-          '&sub4=$sub4'
-          '&sub5=${data.sub5}'
-          '&sub6=${data.sub6}'
-          '&sub7=${data.sub7}'
-          '&sub8=${data.sub8}'
-          '&sub9=${AppConfig.builderProjectId}'
-          '&sub10=$afId';
-
-      debugPrint('AF subs: sub1=$sub1 sub2=$sub2 sub3=$sub3 sub4=$sub4');
-      debugPrint('DL subs: sub5=${data.sub5} sub6=${data.sub6} sub7=${data.sub7} sub8=${data.sub8}');
-      debugPrint('DEBUG: S3: Loading $keitaroUrl');
-
-      // Store debug values reactively
-      if (mounted) {
-        setState(() {
-          _lastKeitaroUrl = keitaroUrl;
-          _debugSub1 = sub1; _debugSub2 = sub2; _debugSub3 = sub3; _debugSub4 = sub4;
-          _debugSub5 = data.sub5; _debugSub6 = data.sub6; _debugSub7 = data.sub7; _debugSub8 = data.sub8;
-          _debugSub9 = AppConfig.builderProjectId; _debugSub10 = afId;
-          _debugGaid = DeviceIdService._gaid ?? 'N/A';
-          _debugAfStatus = _appsFlyerService.afStatusValue;
-          _rawAfData = _appsFlyerService.rawConversionData ?? 'No data received';
-        });
+      if (_attributionWasEmpty) {
+        debugPrint('AF: ⚠️ All sub1-sub4 are EMPTY — URL will be rebuilt if attribution arrives later');
       }
+
+      debugPrint('DEBUG: S3: Loading $keitaroUrl');
 
       // Persist URL
       await PersistenceService.saveLocal(keitaroUrl);
       if (!_loadedFromServer) {
         final gaid = DeviceIdService._gaid;
+        final afId = _appsFlyerService.uid ?? 'no-uid';
         PersistenceService.saveToServer(
           appsflyerId: afId,
           projectId: AppConfig.builderProjectId,
@@ -784,6 +781,66 @@ class _WebViewScreenState extends State<WebViewScreen>
           .recordError(e, stack, reason: 'Deep link handling');
       _resolveUrl(AppConfig.gameUrl);
     }
+  }
+
+  /// Build (or rebuild) the Keitaro URL from deep link data + current attribution
+  String _buildKeitaroUrl(DeepLinkData data) {
+    final afId = _appsFlyerService.uid ?? 'no-uid';
+    final sub1 = _appsFlyerService.campaignId ?? '';
+    final sub2 = _appsFlyerService.adsetId ?? '';
+    final sub3 = _appsFlyerService.adId ?? '';
+    final sub4 = _appsFlyerService.adName ?? '';
+
+    final keitaroUrl = 'https://${data.domain}/${data.alias}'
+        '?sub1=$sub1'
+        '&sub2=$sub2'
+        '&sub3=$sub3'
+        '&sub4=$sub4'
+        '&sub5=${data.sub5}'
+        '&sub6=${data.sub6}'
+        '&sub7=${data.sub7}'
+        '&sub8=${data.sub8}'
+        '&sub9=${AppConfig.builderProjectId}'
+        '&sub10=$afId';
+
+    debugPrint('AF subs: sub1=$sub1 sub2=$sub2 sub3=$sub3 sub4=$sub4');
+    debugPrint('DL subs: sub5=${data.sub5} sub6=${data.sub6} sub7=${data.sub7} sub8=${data.sub8}');
+
+    // Update debug state
+    if (mounted) {
+      setState(() {
+        _lastKeitaroUrl = keitaroUrl;
+        _debugSub1 = sub1; _debugSub2 = sub2; _debugSub3 = sub3; _debugSub4 = sub4;
+        _debugSub5 = data.sub5; _debugSub6 = data.sub6; _debugSub7 = data.sub7; _debugSub8 = data.sub8;
+        _debugSub9 = AppConfig.builderProjectId; _debugSub10 = afId;
+        _debugGaid = DeviceIdService._gaid ?? 'N/A';
+        _debugAfStatus = _appsFlyerService.afStatusValue;
+        _rawAfData = _appsFlyerService.rawConversionData ?? 'Waiting for AF...';
+      });
+    }
+
+    return keitaroUrl;
+  }
+
+  /// Rebuild and reload the Keitaro URL when attribution data arrives late
+  void _rebuildKeitaroUrl(DeepLinkData data) {
+    final newUrl = _buildKeitaroUrl(data);
+    _attributionWasEmpty = false;
+    debugPrint('AF: REBUILT URL with late attribution: $newUrl');
+
+    // Update persistence with the corrected URL
+    PersistenceService.saveLocal(newUrl);
+    final afId = _appsFlyerService.uid ?? 'no-uid';
+    final gaid = DeviceIdService._gaid;
+    PersistenceService.saveToServer(
+      appsflyerId: afId,
+      projectId: AppConfig.builderProjectId,
+      targetUrl: newUrl,
+      gaid: gaid,
+    );
+
+    // Reload WebView with corrected URL
+    _loadUrl(newUrl);
   }
 
   // ── Hidden debug inspector (5 taps within 2 seconds) ──
