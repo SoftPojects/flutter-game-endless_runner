@@ -108,7 +108,7 @@ class DeviceIdService {
   /// Returns the GAID or null if all attempts fail.
   static Future<String?> getGaid({
     bool forceRefresh = false,
-    int maxRetries = 3,
+    int maxRetries = 5,
   }) async {
     if (!forceRefresh && _gaid != null && _gaid != '00000000-0000-0000-0000-000000000000') {
       return _gaid;
@@ -502,7 +502,7 @@ class _WebViewScreenState extends State<WebViewScreen>
 
   Future<void> _fetchAndSetGaid({bool forceRefresh = false}) async {
     // Uses DeviceIdService's internal retry (3 attempts, 1s apart)
-    final gaid = await DeviceIdService.getGaid(forceRefresh: forceRefresh, maxRetries: 3);
+    final gaid = await DeviceIdService.getGaid(forceRefresh: forceRefresh, maxRetries: 5);
     if (!mounted) return;
     setState(() {
       if (gaid == null || gaid.isEmpty) {
