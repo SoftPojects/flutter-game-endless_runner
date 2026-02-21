@@ -78,7 +78,7 @@ dependencies {
     implementation("com.google.firebase:firebase-analytics")
 
     // КРИТИЧНО ДЛЯ GAID: Библиотека для получения Advertising ID
-    implementation("com.google.android.gms:play-services-ads-identifier:18.0.1")
+    implementation("com.google.android.gms:play-services-ads:22.6.0")
 }
 
 flutter {
