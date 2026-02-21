@@ -104,27 +104,48 @@ class DeviceIdService {
   static String? _gaid;
   static String? _lastError; // Store error type for debug display
 
-  /// Force-fetch GAID, bypassing cache. Use for retries.
-  static Future<String?> getGaid({bool forceRefresh = false}) async {
-    if (!forceRefresh && _gaid != null) return _gaid;
-    try {
-      _lastError = null;
-      final id = await AdvertisingId.id(true);
-      if (id != null && id.isNotEmpty) {
-        if (id == '00000000-0000-0000-0000-000000000000') {
-          debugPrint('GAID: ⚠️ All zeros — AD_ID permission missing or tracking limited');
-          _gaid = id;
+  /// Fetch GAID with automatic retry (up to [maxRetries] times, 1s apart).
+  /// Returns the GAID or null if all attempts fail.
+  static Future<String?> getGaid({
+    bool forceRefresh = false,
+    int maxRetries = 3,
+  }) async {
+    if (!forceRefresh && _gaid != null && _gaid != '00000000-0000-0000-0000-000000000000') {
+      return _gaid;
+    }
+
+    for (int attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        _lastError = null;
+        final id = await AdvertisingId.id(true);
+        if (id != null && id.isNotEmpty) {
+          if (id == '00000000-0000-0000-0000-000000000000') {
+            debugPrint('GAID attempt $attempt/$maxRetries: ⚠️ All zeros — AD_ID permission missing or tracking limited');
+            _gaid = id;
+            // Don't return yet — retry in case Play Services hasn't fully initialized
+          } else {
+            _gaid = id;
+            debugPrint('GAID attempt $attempt/$maxRetries: ✅ $id');
+            return _gaid; // Success — stop retrying
+          }
         } else {
-          _gaid = id;
-          debugPrint('GAID: $id');
+          _lastError = 'Returned null/empty (attempt $attempt)';
+          debugPrint('GAID attempt $attempt/$maxRetries: null or empty');
         }
-      } else {
-        _lastError = 'Returned null/empty (permission not granted?)';
-        debugPrint('GAID: null or empty — permission likely missing');
+      } catch (e) {
+        _lastError = 'PERMISSION_OR_LIBRARY_ISSUE: ${e.runtimeType}: $e';
+        debugPrint('GAID attempt $attempt/$maxRetries: Failed — ${e.runtimeType}: $e');
       }
-    } catch (e) {
-      _lastError = '${e.runtimeType}: $e';
-      debugPrint('GAID: Failed to get: $e (type: ${e.runtimeType})');
+
+      // Wait 1s before retrying (except on last attempt)
+      if (attempt < maxRetries) {
+        await Future.delayed(const Duration(seconds: 1));
+      }
+    }
+
+    // All retries exhausted
+    if (_gaid == null) {
+      _lastError ??= 'PERMISSION_OR_LIBRARY_ISSUE: All $maxRetries attempts failed';
     }
     return _gaid;
   }
@@ -410,6 +431,9 @@ class _WebViewScreenState extends State<WebViewScreen>
   DeepLinkData? _pendingDeepLinkData;
   bool _attributionWasEmpty = false; // true if URL was built without attribution
 
+  // Future for GAID fetch — awaited before AF init
+  late Future<void> _gaidFuture;
+
   // Debug variables — class-level so they're always accessible
   int _debugTapCount = 0;
   DateTime? _firstDebugTapTime;
@@ -437,8 +461,9 @@ class _WebViewScreenState extends State<WebViewScreen>
   void initState() {
     super.initState();
 
-    // ── GAID: Fetch with retries at 0s, 0.5s, and 2s ──
-    _fetchGaidWithRetries();
+    // ── GAID: Fetch with built-in retry (up to 3 attempts, 1s apart) ──
+    // This is non-blocking; _startInitSequence will await it before AF init.
+    _gaidFuture = _fetchGaidWithRetries();
 
     // Progress bar fills over 10s (matches max timeout)
     _splashController = AnimationController(
@@ -470,30 +495,20 @@ class _WebViewScreenState extends State<WebViewScreen>
     _initConnectivityListener();
   }
 
-  // ── GAID retry logic ──
+  // ── GAID fetch with built-in retry ──
   Future<void> _fetchGaidWithRetries() async {
-    // Attempt 1: immediate
-    await _fetchAndSetGaid();
-    // Attempt 2: after 500ms (Android may need time to bind ad service)
-    if (_debugGaid.startsWith('⚠️') || _debugGaid == 'N/A') {
-      await Future.delayed(const Duration(milliseconds: 500));
-      await _fetchAndSetGaid(forceRefresh: true);
-    }
-    // Attempt 3: after 2s (last resort)
-    if (_debugGaid.startsWith('⚠️') || _debugGaid == 'N/A') {
-      await Future.delayed(const Duration(seconds: 2));
-      await _fetchAndSetGaid(forceRefresh: true);
-    }
+    await _fetchAndSetGaid(forceRefresh: true);
   }
 
   Future<void> _fetchAndSetGaid({bool forceRefresh = false}) async {
-    final gaid = await DeviceIdService.getGaid(forceRefresh: forceRefresh);
+    // Uses DeviceIdService's internal retry (3 attempts, 1s apart)
+    final gaid = await DeviceIdService.getGaid(forceRefresh: forceRefresh, maxRetries: 3);
     if (!mounted) return;
     setState(() {
       if (gaid == null || gaid.isEmpty) {
         final err = DeviceIdService.lastError;
         _debugGaid = err != null
-            ? '⚠️ NULL — Error: $err'
+            ? '⚠️ PERMISSION_OR_LIBRARY_ISSUE: $err'
             : '⚠️ NULL (permission missing?)';
       } else if (gaid == '00000000-0000-0000-0000-000000000000') {
         _debugGaid = '⚠️ $gaid (tracking limited / permission missing)';
@@ -519,7 +534,13 @@ class _WebViewScreenState extends State<WebViewScreen>
       return;
     }
 
-    // ── Step 2: Init AppsFlyer + start parallel server check ──
+    // ── Step 2: WAIT for GAID before initializing AppsFlyer ──
+    // AppsFlyer needs GAID available at SDK start to correctly attribute installs.
+    debugPrint('INIT: Awaiting GAID before AF init...');
+    await _gaidFuture;
+    debugPrint('INIT: GAID result = ${DeviceIdService._gaid ?? "null"} — proceeding with AF init');
+
+    // ── Step 3: Init AppsFlyer (GAID is now available for the SDK) ──
     _appsFlyerService.init(
       onDeepLink: _onDeepLinkResult,
       onConversionData: _onConversionCampaign,
@@ -557,9 +578,9 @@ class _WebViewScreenState extends State<WebViewScreen>
       }
     });
 
-    // GAID already fetched in initState — no duplicate call needed
-
-    // Fetch GAID + server check in parallel with deep link listener
+    // GAID is already fetched — AF SDK will pick it up automatically.
+    // No special setCustomerUserId needed; the SDK reads GAID via Play Services
+    // as long as the AD_ID permission and play-services-ads-identifier are present.
     _checkServerInParallel();
 
     // ── Step 3: Max 10s fallback timer ──
