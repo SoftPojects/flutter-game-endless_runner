@@ -16,7 +16,8 @@ plugins {
 }
 
 android {
-    namespace = "com.example.endless_runner"
+    // ВАЖНО: это значение меняется скриптом Codemagic во время билда
+    namespace = "com.example.endless_runner" 
     compileSdk = flutter.compileSdkVersion
     ndkVersion = flutter.ndkVersion
 
@@ -41,6 +42,7 @@ android {
     }
 
     defaultConfig {
+        // ВАЖНО: это значение меняется скриптом Codemagic во время билда
         applicationId = "com.example.endless_runner"
         minSdk = 21
         targetSdk = flutter.targetSdkVersion
@@ -55,16 +57,28 @@ android {
             } else {
                 signingConfigs.getByName("debug")
             }
+            
+            // Оставляем false для тестов, чтобы исключить влияние обфускации
             isMinifyEnabled = false
             isShrinkResources = false
+            
+            // Путь к файлу правил (создай этот файл в android/app/proguard-rules.pro)
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 }
 
 dependencies {
+    // Firebase BOM
     implementation(platform("com.google.firebase:firebase-bom:34.9.0"))
     implementation("com.google.firebase:firebase-crashlytics")
     implementation("com.google.firebase:firebase-analytics")
+
+    // КРИТИЧНО ДЛЯ GAID: Библиотека для получения Advertising ID
+    implementation("com.google.android.gms:play-services-ads-identifier:18.0.1")
 }
 
 flutter {
