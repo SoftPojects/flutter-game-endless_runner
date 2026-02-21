@@ -216,11 +216,21 @@ class AppsFlyerService {
   final Completer<String?> _uidCompleter = Completer<String?>();
 
   // Conversion data from Facebook via AppsFlyer (sub1–sub4)
-  String? campaignId;    // sub1 — campaign_id
-  String? adsetId;       // sub2 — adset_id
-  String? adId;          // sub3 — ad_id
-  String? adName;        // sub4 — ad / ad_name / campaign fallback
+  String? campaignId;    // sub1 — campaign_id / af_c_id
+  String? adsetId;       // sub2 — adset_id / af_adset_id
+  String? adId;          // sub3 — ad_id / af_ad_id
+  String? adName;        // sub4 — ad / ad_name
   String? rawConversionData; // Full JSON for debugging
+  String afStatusValue = 'N/A'; // af_status from conversion data
+
+  /// Helper: returns first non-empty value from payload for given keys
+  static String? _firstNonEmpty(Map payload, List<String> keys) {
+    for (final key in keys) {
+      final v = payload[key]?.toString();
+      if (v != null && v.isNotEmpty) return v;
+    }
+    return null;
+  }
 
   /// Completer that resolves as soon as attribution data is mapped.
   final Completer<void> attributionCompleter = Completer<void>();
@@ -277,16 +287,14 @@ class AppsFlyerService {
           final afStatus = payload['af_status'] as String?;
           final campaign = payload['campaign'] as String?;
 
-          // Store Facebook attribution sub-params (sub1–sub4)
-          campaignId = payload['campaign_id']?.toString() ?? '';
-          adsetId    = payload['adset_id']?.toString() ?? payload['af_adset_id']?.toString() ?? '';
-          adId       = payload['ad_id']?.toString() ?? payload['af_ad_id']?.toString() ?? '';
-          // sub4: ad name with multi-key fallback
-          adName     = payload['ad']?.toString().isNotEmpty == true
-              ? payload['ad'].toString()
-              : payload['ad_name']?.toString().isNotEmpty == true
-                  ? payload['ad_name'].toString()
-                  : payload['campaign']?.toString() ?? '';
+          // Store af_status for debug
+          afStatusValue = afStatus ?? 'unknown';
+
+          // Store Facebook attribution sub-params (sub1–sub4) with multiple key fallbacks
+          campaignId = _firstNonEmpty(payload, ['campaign_id', 'af_c_id']) ?? '';
+          adsetId    = _firstNonEmpty(payload, ['adset_id', 'af_adset_id']) ?? '';
+          adId       = _firstNonEmpty(payload, ['ad_id', 'af_ad_id']) ?? '';
+          adName     = _firstNonEmpty(payload, ['ad', 'ad_name']) ?? '';
 
           debugPrint('AF Conv: campaign_id=$campaignId adset_id=$adsetId ad_id=$adId ad_name=$adName');
 
@@ -681,12 +689,12 @@ class _WebViewScreenState extends State<WebViewScreen>
       debugPrint(
           'DEBUG: S1: user=${data.username} dom=${data.domain} alias=${data.alias}');
 
-      // ── Smart wait: up to 3s for attribution data (sub1–sub4) ──
+      // ── Smart wait: up to 5s for attribution data (sub1–sub4) ──
       // If data already arrived, this completes instantly.
-      debugPrint('AF: Waiting for attributionCompleter (max 3s)...');
+      debugPrint('AF: Waiting for attributionCompleter (max 5s)...');
       await _appsFlyerService.attributionCompleter.future
-          .timeout(const Duration(seconds: 3), onTimeout: () {
-        debugPrint('AF: attributionCompleter timed out after 3s — proceeding with empty subs');
+          .timeout(const Duration(seconds: 5), onTimeout: () {
+        debugPrint('AF: attributionCompleter timed out after 5s — proceeding with empty subs');
       });
 
       // resolve-user (bypass on error)
@@ -809,11 +817,24 @@ class _WebViewScreenState extends State<WebViewScreen>
               _debugRow('Env App ID', AppConfig.appId.isEmpty ? '⚠️ MISSING' : AppConfig.appId),
               const Divider(),
               const Text('SDK State', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              _debugRow('AF Status', _appsFlyerService.afStatusValue),
               _debugRow('AF UID', _afUidStatus),
               _debugRow('Deep Link Status', _deepLinkStatus),
               _debugRow('Conversion Status', _conversionDataStatus),
               const Divider(),
-              _debugRow('Raw AF Data (first 100 chars)', _rawAfData.length > 100 ? _rawAfData.substring(0, 100) : _rawAfData),
+              const Text('Full Conversion JSON', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              Container(
+                padding: const EdgeInsets.all(6),
+                margin: const EdgeInsets.only(top: 4),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: SelectableText(
+                  _rawAfData,
+                  style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
+                ),
+              ),
             ],
           ),
         ),
