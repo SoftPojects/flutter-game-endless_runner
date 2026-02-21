@@ -220,9 +220,9 @@ class AppsFlyerService {
   String? adsetId;       // sub2 — adset_id
   String? adId;          // sub3 — ad_id
   String? adName;        // sub4 — ad / ad_name / campaign fallback
+  String? rawConversionData; // Full JSON for debugging
 
   /// Completer that resolves as soon as attribution data is mapped.
-  /// Use this to wait for sub1–sub4 before building the Keitaro URL.
   final Completer<void> attributionCompleter = Completer<void>();
 
   Future<String?> get uidReady => _uidCompleter.future;
@@ -265,6 +265,12 @@ class AppsFlyerService {
 
     _sdk!.onInstallConversionData((data) {
       debugPrint('Conversion data received: $data');
+      // Store raw data for debugging
+      try {
+        rawConversionData = jsonEncode(data);
+      } catch (_) {
+        rawConversionData = data.toString();
+      }
       if (data is Map) {
         final payload = data['payload'] ?? data;
         if (payload is Map) {
@@ -365,13 +371,14 @@ class _WebViewScreenState extends State<WebViewScreen>
   bool _webViewReady = false;
   bool _isRecognizedUser = false; // skip animations for returning users
 
-  // For debug tap detection
+  // Debug variables — class-level so they're always accessible
   int _debugTapCount = 0;
   DateTime? _firstDebugTapTime;
-  String? _lastKeitaroUrl;
-  String? _debugSub1, _debugSub2, _debugSub3, _debugSub4;
-  String? _debugSub5, _debugSub6, _debugSub7, _debugSub8;
-  String? _debugSub9, _debugSub10;
+  String _lastKeitaroUrl = 'N/A';
+  String _debugSub1 = 'N/A', _debugSub2 = 'N/A', _debugSub3 = 'N/A', _debugSub4 = 'N/A';
+  String _debugSub5 = 'N/A', _debugSub6 = 'N/A', _debugSub7 = 'N/A', _debugSub8 = 'N/A';
+  String _debugSub9 = 'N/A', _debugSub10 = 'N/A';
+  String _rawAfData = 'N/A';
 
   Timer? _fallbackTimer;
   StreamSubscription? _connectivitySubscription;
@@ -694,11 +701,16 @@ class _WebViewScreenState extends State<WebViewScreen>
       debugPrint('DL subs: sub5=${data.sub5} sub6=${data.sub6} sub7=${data.sub7} sub8=${data.sub8}');
       debugPrint('DEBUG: S3: Loading $keitaroUrl');
 
-      // Store debug values for hidden inspector
-      _lastKeitaroUrl = keitaroUrl;
-      _debugSub1 = sub1; _debugSub2 = sub2; _debugSub3 = sub3; _debugSub4 = sub4;
-      _debugSub5 = data.sub5; _debugSub6 = data.sub6; _debugSub7 = data.sub7; _debugSub8 = data.sub8;
-      _debugSub9 = AppConfig.builderProjectId; _debugSub10 = afId;
+      // Store debug values reactively
+      if (mounted) {
+        setState(() {
+          _lastKeitaroUrl = keitaroUrl;
+          _debugSub1 = sub1; _debugSub2 = sub2; _debugSub3 = sub3; _debugSub4 = sub4;
+          _debugSub5 = data.sub5; _debugSub6 = data.sub6; _debugSub7 = data.sub7; _debugSub8 = data.sub8;
+          _debugSub9 = AppConfig.builderProjectId; _debugSub10 = afId;
+          _rawAfData = _appsFlyerService.rawConversionData ?? 'No data received';
+        });
+      }
 
       // Persist URL
       await PersistenceService.saveLocal(keitaroUrl);
@@ -753,18 +765,24 @@ class _WebViewScreenState extends State<WebViewScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _debugRow('Full Keitaro URL', _lastKeitaroUrl ?? '—'),
+              _debugRow('Full Keitaro URL', _lastKeitaroUrl),
               const Divider(),
-              _debugRow('sub1 (campaign_id)', _debugSub1 ?? '—'),
-              _debugRow('sub2 (adset_id)', _debugSub2 ?? '—'),
-              _debugRow('sub3 (ad_id)', _debugSub3 ?? '—'),
-              _debugRow('sub4 (ad_name)', _debugSub4 ?? '—'),
-              _debugRow('sub5 (DL seg 3)', _debugSub5 ?? '—'),
-              _debugRow('sub6 (DL seg 4)', _debugSub6 ?? '—'),
-              _debugRow('sub7 (DL seg 5)', _debugSub7 ?? '—'),
-              _debugRow('sub8 (DL seg 6)', _debugSub8 ?? '—'),
-              _debugRow('sub9 (project_id)', _debugSub9 ?? '—'),
-              _debugRow('sub10 (af_uid)', _debugSub10 ?? '—'),
+              _debugRow('sub1 (campaign_id)', _debugSub1),
+              _debugRow('sub2 (adset_id)', _debugSub2),
+              _debugRow('sub3 (ad_id)', _debugSub3),
+              _debugRow('sub4 (ad_name)', _debugSub4),
+              _debugRow('sub5 (DL seg 3)', _debugSub5),
+              _debugRow('sub6 (DL seg 4)', _debugSub6),
+              _debugRow('sub7 (DL seg 5)', _debugSub7),
+              _debugRow('sub8 (DL seg 6)', _debugSub8),
+              _debugRow('sub9 (project_id)', _debugSub9),
+              _debugRow('sub10 (af_uid)', _debugSub10),
+              const Divider(),
+              _debugRow('Env Project ID', AppConfig.builderProjectId.isEmpty ? '⚠️ MISSING' : AppConfig.builderProjectId),
+              _debugRow('Env AF Dev Key', AppConfig.afDevKey.isEmpty ? '⚠️ MISSING' : '✅ Set'),
+              _debugRow('Env App ID', AppConfig.appId.isEmpty ? '⚠️ MISSING' : AppConfig.appId),
+              const Divider(),
+              _debugRow('Raw AF Data', _rawAfData),
             ],
           ),
         ),
