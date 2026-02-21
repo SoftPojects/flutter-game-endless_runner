@@ -102,14 +102,23 @@ class DeepLinkParser {
 
 class DeviceIdService {
   static String? _gaid;
+  static bool _fetched = false;
 
   static Future<String?> getGaid() async {
-    if (_gaid != null) return _gaid;
+    if (_fetched) return _gaid;
+    _fetched = true;
     try {
       final id = await AdvertisingId.id(true);
-      if (id != null && id.isNotEmpty && id != '00000000-0000-0000-0000-000000000000') {
-        _gaid = id;
-        debugPrint('GAID: $id');
+      if (id != null && id.isNotEmpty) {
+        if (id == '00000000-0000-0000-0000-000000000000') {
+          debugPrint('GAID: ⚠️ All zeros — AD_ID permission missing or tracking limited');
+          _gaid = id; // Still store it so debug can show the warning
+        } else {
+          _gaid = id;
+          debugPrint('GAID: $id');
+        }
+      } else {
+        debugPrint('GAID: null or empty — permission likely missing');
       }
     } catch (e) {
       debugPrint('GAID: Failed to get: $e');
@@ -211,8 +220,14 @@ class PersistenceService {
 // ─────────────────────────────────────────────
 
 class AppsFlyerService {
+  // ── Singleton ──
+  static final AppsFlyerService _instance = AppsFlyerService._internal();
+  factory AppsFlyerService() => _instance;
+  AppsFlyerService._internal();
+
   AppsflyerSdk? _sdk;
   String? uid;
+  bool _initialized = false;
   final Completer<String?> _uidCompleter = Completer<String?>();
 
   // Conversion data from Facebook via AppsFlyer (sub1–sub4)
@@ -242,9 +257,15 @@ class AppsFlyerService {
     required void Function(String campaign) onConversionData,
     required void Function() onOrganic,
   }) async {
+    if (_initialized) {
+      debugPrint('AF: Already initialized — skipping duplicate init');
+      return;
+    }
+    _initialized = true;
+
     if (AppConfig.afDevKey.isEmpty) {
       debugPrint('AF_DEV_KEY not set — skipping AppsFlyer init');
-      _uidCompleter.complete(null);
+      if (!_uidCompleter.isCompleted) _uidCompleter.complete(null);
       if (!attributionCompleter.isCompleted) attributionCompleter.complete();
       return;
     }
@@ -410,6 +431,21 @@ class _WebViewScreenState extends State<WebViewScreen>
   void initState() {
     super.initState();
 
+    // ── GAID: Fetch at the VERY START so it's available for debug ──
+    DeviceIdService.getGaid().then((gaid) {
+      if (mounted) {
+        setState(() {
+          if (gaid == null || gaid.isEmpty) {
+            _debugGaid = '⚠️ NULL (permission missing?)';
+          } else if (gaid == '00000000-0000-0000-0000-000000000000') {
+            _debugGaid = '⚠️ $gaid (tracking limited / permission missing)';
+          } else {
+            _debugGaid = gaid;
+          }
+        });
+      }
+    });
+
     // Progress bar fills over 10s (matches max timeout)
     _splashController = AnimationController(
       duration: const Duration(seconds: 10),
@@ -494,12 +530,7 @@ class _WebViewScreenState extends State<WebViewScreen>
       }
     });
 
-    // Fetch GAID early for debug display
-    DeviceIdService.getGaid().then((gaid) {
-      if (mounted && gaid != null) {
-        setState(() => _debugGaid = gaid);
-      }
-    });
+    // GAID already fetched in initState — no duplicate call needed
 
     // Fetch GAID + server check in parallel with deep link listener
     _checkServerInParallel();
@@ -728,7 +759,14 @@ class _WebViewScreenState extends State<WebViewScreen>
         debugPrint('AF: ⚠️ attributionCompleter TIMED OUT after 5s — proceeding with empty subs');
       });
 
-      if (!attributionTimedOut) {
+      if (attributionTimedOut) {
+        if (mounted) {
+          setState(() {
+            _conversionDataStatus = '⚠️ TIMEOUT: AppsFlyer did not respond in 5s';
+            _debugAfStatus = '⏱️ TIMEOUT (no response in 5s)';
+          });
+        }
+      } else {
         debugPrint('AF: ✅ Attribution data received BEFORE timeout');
       }
 
