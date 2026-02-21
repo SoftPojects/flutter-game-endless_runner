@@ -386,7 +386,9 @@ class _WebViewScreenState extends State<WebViewScreen>
   String _debugSub1 = 'N/A', _debugSub2 = 'N/A', _debugSub3 = 'N/A', _debugSub4 = 'N/A';
   String _debugSub5 = 'N/A', _debugSub6 = 'N/A', _debugSub7 = 'N/A', _debugSub8 = 'N/A';
   String _debugSub9 = 'N/A', _debugSub10 = 'N/A';
+  String _debugGaid = 'N/A';
   String _rawAfData = 'N/A';
+  String _debugAfStatus = 'N/A';
   String _deepLinkStatus = 'Waiting...';
   String _conversionDataStatus = 'Waiting...';
   String _afUidStatus = 'Waiting...';
@@ -473,7 +475,20 @@ class _WebViewScreenState extends State<WebViewScreen>
         setState(() {
           _conversionDataStatus = '✅ Received';
           _rawAfData = _appsFlyerService.rawConversionData ?? 'No data';
+          _debugAfStatus = _appsFlyerService.afStatusValue;
+          // Update sub1-sub4 from conversion data as soon as it arrives
+          _debugSub1 = _appsFlyerService.campaignId ?? 'N/A';
+          _debugSub2 = _appsFlyerService.adsetId ?? 'N/A';
+          _debugSub3 = _appsFlyerService.adId ?? 'N/A';
+          _debugSub4 = _appsFlyerService.adName ?? 'N/A';
         });
+      }
+    });
+
+    // Fetch GAID early for debug display
+    DeviceIdService.getGaid().then((gaid) {
+      if (mounted && gaid != null) {
+        setState(() => _debugGaid = gaid);
       }
     });
 
@@ -742,6 +757,8 @@ class _WebViewScreenState extends State<WebViewScreen>
           _debugSub1 = sub1; _debugSub2 = sub2; _debugSub3 = sub3; _debugSub4 = sub4;
           _debugSub5 = data.sub5; _debugSub6 = data.sub6; _debugSub7 = data.sub7; _debugSub8 = data.sub8;
           _debugSub9 = AppConfig.builderProjectId; _debugSub10 = afId;
+          _debugGaid = DeviceIdService._gaid ?? 'N/A';
+          _debugAfStatus = _appsFlyerService.afStatusValue;
           _rawAfData = _appsFlyerService.rawConversionData ?? 'No data received';
         });
       }
@@ -799,40 +816,74 @@ class _WebViewScreenState extends State<WebViewScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
-              _debugRow('Full Keitaro URL', _lastKeitaroUrl),
+              // ── AF Status (with organic warning) ──
+              const Text('📡 AF Status', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              _debugRow('af_status', _debugAfStatus == 'Organic'
+                  ? '⚠️ ORGANIC (No FB Data)'
+                  : _debugAfStatus),
               const Divider(),
+              // ── Facebook IDs (sub1–sub4) ──
+              const Text('📊 AF IDs (Facebook)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
               _debugRow('sub1 (campaign_id)', _debugSub1),
               _debugRow('sub2 (adset_id)', _debugSub2),
               _debugRow('sub3 (ad_id)', _debugSub3),
               _debugRow('sub4 (ad_name)', _debugSub4),
+              const Divider(),
+              // ── Deep Link Params (sub5–sub8) ──
+              const Text('🔗 DL Params', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
               _debugRow('sub5 (DL seg 3)', _debugSub5),
               _debugRow('sub6 (DL seg 4)', _debugSub6),
               _debugRow('sub7 (DL seg 5)', _debugSub7),
               _debugRow('sub8 (DL seg 6)', _debugSub8),
+              const Divider(),
+              // ── Internal IDs ──
+              const Text('🆔 Internal IDs', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
               _debugRow('sub9 (project_id)', _debugSub9),
               _debugRow('sub10 (af_uid)', _debugSub10),
+              _debugRow('GAID', _debugGaid),
               const Divider(),
+              // ── Environment Checks ──
+              const Text('⚙️ Environment', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
               _debugRow('Env Project ID', AppConfig.builderProjectId.isEmpty ? '⚠️ MISSING' : AppConfig.builderProjectId),
               _debugRow('Env AF Dev Key', AppConfig.afDevKey.isEmpty ? '⚠️ MISSING' : '✅ Set'),
               _debugRow('Env App ID', AppConfig.appId.isEmpty ? '⚠️ MISSING' : AppConfig.appId),
               const Divider(),
-              const Text('SDK State', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-              _debugRow('AF Status', _appsFlyerService.afStatusValue),
+              // ── SDK State ──
+              const Text('🔧 SDK State', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
               _debugRow('AF UID', _afUidStatus),
               _debugRow('Deep Link Status', _deepLinkStatus),
               _debugRow('Conversion Status', _conversionDataStatus),
               const Divider(),
-              const Text('Full Conversion JSON', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              // ── Keitaro URL ──
+              const Text('🌐 Final URL', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
               Container(
                 padding: const EdgeInsets.all(6),
                 margin: const EdgeInsets.only(top: 4),
                 decoration: BoxDecoration(
-                  color: Colors.grey[100],
+                  color: Colors.blue[50],
                   borderRadius: BorderRadius.circular(6),
                 ),
                 child: SelectableText(
-                  _rawAfData,
-                  style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
+                  _lastKeitaroUrl,
+                  style: const TextStyle(fontSize: 10, fontFamily: 'monospace', color: Colors.blue),
+                ),
+              ),
+              const SizedBox(height: 8),
+              // ── Raw Conversion Data ──
+              const Text('📋 RAW MAP (Full Conversion JSON)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              Container(
+                padding: const EdgeInsets.all(6),
+                margin: const EdgeInsets.only(top: 4),
+                constraints: const BoxConstraints(maxHeight: 200),
+                decoration: BoxDecoration(
+                  color: Colors.grey[100],
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: SingleChildScrollView(
+                  child: SelectableText(
+                    _rawAfData,
+                    style: const TextStyle(fontSize: 10, fontFamily: 'monospace'),
+                  ),
                 ),
               ),
             ],
