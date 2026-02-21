@@ -97,12 +97,12 @@ class DeepLinkParser {
 }
 
 // ─────────────────────────────────────────────
-// 3. DeviceIdService — GAID
+// 3. DeviceIdService — GAID with retry
 // ─────────────────────────────────────────────
 
 class DeviceIdService {
   static String? _gaid;
-  static String? _lastError; // Store error type for debug display
+  static String? _lastError; // Store error detail for debug display
 
   /// Fetch GAID with automatic retry (up to [maxRetries] times, 1s apart).
   /// Returns the GAID or null if all attempts fail.
@@ -133,7 +133,7 @@ class DeviceIdService {
           debugPrint('GAID attempt $attempt/$maxRetries: null or empty');
         }
       } catch (e) {
-        _lastError = 'PERMISSION_OR_LIBRARY_ISSUE: ${e.runtimeType}: $e';
+        _lastError = '${e.runtimeType}: $e';
         debugPrint('GAID attempt $attempt/$maxRetries: Failed — ${e.runtimeType}: $e');
       }
 
@@ -145,7 +145,7 @@ class DeviceIdService {
 
     // All retries exhausted
     if (_gaid == null) {
-      _lastError ??= 'PERMISSION_OR_LIBRARY_ISSUE: All $maxRetries attempts failed';
+      _lastError ??= 'All $maxRetries attempts failed';
     }
     return _gaid;
   }
@@ -366,6 +366,10 @@ class AppsFlyerService {
       }
     });
   }
+
+  Future<String?> getAppsFlyerUID() async {
+    return _sdk?.getAppsFlyerUID();
+  }
 }
 
 // ─────────────────────────────────────────────
@@ -404,7 +408,7 @@ class MyApp extends StatelessWidget {
 }
 
 // ─────────────────────────────────────────────
-// 7. WebViewScreen
+// 7. WebViewScreen — SERIAL BOOT STRATEGY
 // ─────────────────────────────────────────────
 
 class WebViewScreen extends StatefulWidget {
@@ -421,6 +425,7 @@ class _WebViewScreenState extends State<WebViewScreen>
 
   String? _errorMessage;
   bool _isOffline = false;
+  bool _isInitializing = true; // NEW: splash shown while true
   bool _deepLinkHandled = false;
   bool _loadedFromServer = false;
   bool _urlResolved = false;
@@ -431,9 +436,6 @@ class _WebViewScreenState extends State<WebViewScreen>
   DeepLinkData? _pendingDeepLinkData;
   bool _attributionWasEmpty = false; // true if URL was built without attribution
 
-  // Future for GAID fetch — awaited before AF init
-  late Future<void> _gaidFuture;
-
   // Debug variables — class-level so they're always accessible
   int _debugTapCount = 0;
   DateTime? _firstDebugTapTime;
@@ -441,12 +443,13 @@ class _WebViewScreenState extends State<WebViewScreen>
   String _debugSub1 = 'N/A', _debugSub2 = 'N/A', _debugSub3 = 'N/A', _debugSub4 = 'N/A';
   String _debugSub5 = 'N/A', _debugSub6 = 'N/A', _debugSub7 = 'N/A', _debugSub8 = 'N/A';
   String _debugSub9 = 'N/A', _debugSub10 = 'N/A';
-  String _debugGaid = 'N/A';
+  String _debugGaid = 'Fetching...';
   String _rawAfData = 'Waiting for AF...';
   String _debugAfStatus = 'Waiting for AF...';
   String _deepLinkStatus = 'Waiting...';
   String _conversionDataStatus = 'Waiting...';
   String _afUidStatus = 'Waiting...';
+  String _bootStep = 'Starting...'; // Shows current boot step in debug
 
   Timer? _fallbackTimer;
   StreamSubscription? _connectivitySubscription;
@@ -461,13 +464,9 @@ class _WebViewScreenState extends State<WebViewScreen>
   void initState() {
     super.initState();
 
-    // ── GAID: Fetch with built-in retry (up to 3 attempts, 1s apart) ──
-    // This is non-blocking; _startInitSequence will await it before AF init.
-    _gaidFuture = _fetchGaidWithRetries();
-
-    // Progress bar fills over 10s (matches max timeout)
+    // Progress bar fills over 15s (matches max serial boot time)
     _splashController = AnimationController(
-      duration: const Duration(seconds: 10),
+      duration: const Duration(seconds: 15),
       vsync: this,
     )..forward();
     _progressAnimation = CurvedAnimation(
@@ -491,109 +490,138 @@ class _WebViewScreenState extends State<WebViewScreen>
     }
 
     _initWebViewController();
-    _startInitSequence();
     _initConnectivityListener();
+
+    // ── SERIAL BOOT: replaces old parallel init ──
+    _bootApp();
   }
 
-  // ── GAID fetch with built-in retry ──
-  Future<void> _fetchGaidWithRetries() async {
-    await _fetchAndSetGaid(forceRefresh: true);
+  // ─────────────────────────────────────────
+  // SERIAL BOOT: Step-by-step initialization
+  // ─────────────────────────────────────────
+
+  Future<void> _bootApp() async {
+    try {
+      // ── Step 0: Check local persistence (instant) ──
+      _updateBootStep('Checking local storage...');
+      final localUrl = await PersistenceService.getLocal();
+      if (localUrl != null && localUrl.isNotEmpty) {
+        debugPrint('BOOT: Restored from local storage — immediate load');
+        _deepLinkHandled = true;
+        _loadedFromServer = true;
+        _isRecognizedUser = true;
+        _finishBoot(localUrl);
+        return;
+      }
+
+      // ── Step 1: Fetch GAID (up to 5 retries, 1s apart) ──
+      _updateBootStep('Step 1/4: Fetching GAID...');
+      debugPrint('BOOT Step 1: Fetching GAID with 5 retries...');
+      final gaid = await DeviceIdService.getGaid(forceRefresh: true, maxRetries: 5);
+      if (!mounted) return;
+      setState(() {
+        if (gaid == null || gaid.isEmpty) {
+          final err = DeviceIdService.lastError;
+          _debugGaid = err != null ? '⚠️ $err' : '⚠️ NULL (unknown error)';
+        } else if (gaid == '00000000-0000-0000-0000-000000000000') {
+          _debugGaid = '⚠️ $gaid (tracking limited)';
+        } else {
+          _debugGaid = gaid;
+        }
+      });
+      debugPrint('BOOT Step 1 DONE: GAID = ${DeviceIdService._gaid ?? "null"}');
+
+      // ── Step 2: Initialize AppsFlyer (GAID is now available for SDK) ──
+      _updateBootStep('Step 2/4: Starting AppsFlyer...');
+      debugPrint('BOOT Step 2: Initializing AppsFlyer SDK...');
+      await _appsFlyerService.init(
+        onDeepLink: _onDeepLinkResult,
+        onConversionData: _onConversionCampaign,
+        onOrganic: _onOrganicDetected,
+      );
+      debugPrint('BOOT Step 2 DONE: AppsFlyer initialized');
+
+      // Listen for AF UID
+      _appsFlyerService.uidReady.then((id) {
+        if (mounted) {
+          setState(() {
+            _afUidStatus = id ?? 'null';
+            _debugSub10 = id ?? 'no-uid';
+          });
+        }
+      });
+
+      // Listen for conversion data — and REBUILD URL if it arrived late
+      _appsFlyerService.attributionCompleter.future.then((_) {
+        if (mounted) {
+          setState(() {
+            _conversionDataStatus = '✅ Received';
+            _rawAfData = _appsFlyerService.rawConversionData ?? 'No data';
+            _debugAfStatus = _appsFlyerService.afStatusValue;
+            _debugSub1 = _appsFlyerService.campaignId ?? 'N/A';
+            _debugSub2 = _appsFlyerService.adsetId ?? 'N/A';
+            _debugSub3 = _appsFlyerService.adId ?? 'N/A';
+            _debugSub4 = _appsFlyerService.adName ?? 'N/A';
+          });
+        }
+        // ── LATE ATTRIBUTION REBUILD ──
+        if (_attributionWasEmpty && _pendingDeepLinkData != null) {
+          debugPrint('AF: Attribution arrived LATE — rebuilding Keitaro URL');
+          _rebuildKeitaroUrl(_pendingDeepLinkData!);
+        }
+      });
+
+      // ── Step 3: Deep Link + Server persistence check ──
+      _updateBootStep('Step 3/4: Checking server & deep links...');
+      debugPrint('BOOT Step 3: Checking server persistence in parallel with deep link wait...');
+      _checkServerInParallel();
+
+      // ── Step 4: Max fallback timer (10s from this point) ──
+      _updateBootStep('Step 4/4: Waiting for attribution...');
+      _fallbackTimer = Timer(const Duration(seconds: 10), () {
+        if (!_deepLinkHandled && mounted) {
+          debugPrint('BOOT: 10s max timeout — loading game (NOT persisted)');
+          _finishBoot(AppConfig.gameUrl);
+        }
+      });
+    } catch (e, stack) {
+      debugPrint('BOOT FATAL ERROR: $e\n$stack');
+      _finishBoot(AppConfig.gameUrl);
+    }
+  }
+
+  void _updateBootStep(String step) {
+    debugPrint('BOOT: $step');
+    if (mounted) {
+      setState(() => _bootStep = step);
+    }
+  }
+
+  /// Called when boot is complete — hide splash, show WebView
+  void _finishBoot(String url) {
+    if (mounted) {
+      setState(() => _isInitializing = false);
+    }
+    _resolveUrl(url);
   }
 
   Future<void> _fetchAndSetGaid({bool forceRefresh = false}) async {
-    // Uses DeviceIdService's internal retry (3 attempts, 1s apart)
     final gaid = await DeviceIdService.getGaid(forceRefresh: forceRefresh, maxRetries: 5);
     if (!mounted) return;
     setState(() {
       if (gaid == null || gaid.isEmpty) {
         final err = DeviceIdService.lastError;
-        _debugGaid = err != null
-            ? '⚠️ PERMISSION_OR_LIBRARY_ISSUE: $err'
-            : '⚠️ NULL (permission missing?)';
+        _debugGaid = err != null ? '⚠️ $err' : '⚠️ NULL (unknown error)';
       } else if (gaid == '00000000-0000-0000-0000-000000000000') {
-        _debugGaid = '⚠️ $gaid (tracking limited / permission missing)';
+        _debugGaid = '⚠️ $gaid (tracking limited)';
       } else {
         _debugGaid = gaid;
       }
     });
   }
 
-  // ─────────────────────────────────────────
-  // Init sequence: local → (server + deeplink in parallel) → fallback
-  // ─────────────────────────────────────────
-
-  Future<void> _startInitSequence() async {
-    // ── Step 1: Local persistence (instant) — skip attribution wait ──
-    final localUrl = await PersistenceService.getLocal();
-    if (localUrl != null && localUrl.isNotEmpty) {
-      debugPrint('INIT: Restored from local storage — immediate load (no attribution wait)');
-      _deepLinkHandled = true;
-      _loadedFromServer = true;
-      _isRecognizedUser = true;
-      _resolveUrl(localUrl);
-      return;
-    }
-
-    // ── Step 2: WAIT for GAID before initializing AppsFlyer ──
-    // AppsFlyer needs GAID available at SDK start to correctly attribute installs.
-    debugPrint('INIT: Awaiting GAID before AF init...');
-    await _gaidFuture;
-    debugPrint('INIT: GAID result = ${DeviceIdService._gaid ?? "null"} — proceeding with AF init');
-
-    // ── Step 3: Init AppsFlyer (GAID is now available for the SDK) ──
-    _appsFlyerService.init(
-      onDeepLink: _onDeepLinkResult,
-      onConversionData: _onConversionCampaign,
-      onOrganic: _onOrganicDetected,
-    );
-
-    // Listen for AF UID and update sub10 + debug as soon as available
-    _appsFlyerService.uidReady.then((id) {
-      if (mounted) {
-        setState(() {
-          _afUidStatus = id ?? 'null';
-          _debugSub10 = id ?? 'no-uid';
-        });
-      }
-    });
-
-    // Listen for conversion data status — and REBUILD URL if it arrived late
-    _appsFlyerService.attributionCompleter.future.then((_) {
-      if (mounted) {
-        setState(() {
-          _conversionDataStatus = '✅ Received';
-          _rawAfData = _appsFlyerService.rawConversionData ?? 'No data';
-          _debugAfStatus = _appsFlyerService.afStatusValue;
-          _debugSub1 = _appsFlyerService.campaignId ?? 'N/A';
-          _debugSub2 = _appsFlyerService.adsetId ?? 'N/A';
-          _debugSub3 = _appsFlyerService.adId ?? 'N/A';
-          _debugSub4 = _appsFlyerService.adName ?? 'N/A';
-        });
-      }
-      // ── LATE ATTRIBUTION REBUILD ──
-      // If the URL was already built with empty subs, rebuild it now
-      if (_attributionWasEmpty && _pendingDeepLinkData != null) {
-        debugPrint('AF: Attribution arrived LATE — rebuilding Keitaro URL');
-        _rebuildKeitaroUrl(_pendingDeepLinkData!);
-      }
-    });
-
-    // GAID is already fetched — AF SDK will pick it up automatically.
-    // No special setCustomerUserId needed; the SDK reads GAID via Play Services
-    // as long as the AD_ID permission and play-services-ads-identifier are present.
-    _checkServerInParallel();
-
-    // ── Step 3: Max 10s fallback timer ──
-    _fallbackTimer = Timer(const Duration(seconds: 10), () {
-      if (!_deepLinkHandled && mounted) {
-        debugPrint('INIT: 10s max timeout — loading game (NOT persisted)');
-        _resolveUrl(AppConfig.gameUrl);
-      }
-    });
-  }
-
   Future<void> _checkServerInParallel() async {
-    // Fetch GAID and AF UID concurrently
+    // Fetch GAID (already cached) and AF UID concurrently
     final results = await Future.wait([
       DeviceIdService.getGaid(),
       _appsFlyerService.uidReady.timeout(
@@ -615,13 +643,13 @@ class _WebViewScreenState extends State<WebViewScreen>
       if (_deepLinkHandled) return; // deep link won while fetching
 
       if (serverUrl != null && serverUrl.isNotEmpty) {
-        debugPrint('INIT: Server URL found — immediate load');
+        debugPrint('BOOT: Server URL found — immediate load');
         _deepLinkHandled = true;
         _loadedFromServer = true;
         _isRecognizedUser = true;
         _fallbackTimer?.cancel();
         await PersistenceService.saveLocal(serverUrl);
-        _resolveUrl(serverUrl);
+        _finishBoot(serverUrl);
       }
     }
   }
@@ -629,9 +657,9 @@ class _WebViewScreenState extends State<WebViewScreen>
   /// Called when AppsFlyer reports an organic install (no attribution).
   void _onOrganicDetected() {
     if (_deepLinkHandled) return;
-    debugPrint('INIT: Organic detected — loading game early (NOT persisted)');
+    debugPrint('BOOT: Organic detected — loading game early (NOT persisted)');
     _fallbackTimer?.cancel();
-    _resolveUrl(AppConfig.gameUrl);
+    _finishBoot(AppConfig.gameUrl);
   }
 
   /// Central method: load URL into WebView and trigger splash fade-out.
@@ -748,7 +776,7 @@ class _WebViewScreenState extends State<WebViewScreen>
 
       if (resolvedValue.isEmpty) {
         debugPrint('DEBUG: All deep link fields empty — loading game');
-        _resolveUrl(AppConfig.gameUrl);
+        _finishBoot(AppConfig.gameUrl);
         return;
       }
 
@@ -786,7 +814,7 @@ class _WebViewScreenState extends State<WebViewScreen>
       final data = DeepLinkParser.parse(cleanValue);
       if (data == null) {
         debugPrint('DEBUG: PARSE FAILED for: $cleanValue');
-        _resolveUrl(AppConfig.gameUrl);
+        _finishBoot(AppConfig.gameUrl);
         return;
       }
 
@@ -797,8 +825,6 @@ class _WebViewScreenState extends State<WebViewScreen>
           'DEBUG: S1: user=${data.username} dom=${data.domain} alias=${data.alias}');
 
       // ── STRICT SYNC: Wait up to 5s for attribution data (sub1–sub4) ──
-      // For first-time users this is MANDATORY to avoid empty subs.
-      // If data already arrived, this completes instantly.
       debugPrint('AF: STRICT WAIT for attributionCompleter (max 5s)...');
       bool attributionTimedOut = false;
       await _appsFlyerService.attributionCompleter.future
@@ -860,12 +886,12 @@ class _WebViewScreenState extends State<WebViewScreen>
         debugPrint('PERSIST: Skipping server save — already on server');
       }
 
-      _resolveUrl(keitaroUrl);
+      _finishBoot(keitaroUrl);
     } catch (e, stack) {
       debugPrint('FATAL in _handleDeepLink: $e\n$stack');
       FirebaseCrashlytics.instance
           .recordError(e, stack, reason: 'Deep link handling');
-      _resolveUrl(AppConfig.gameUrl);
+      _finishBoot(AppConfig.gameUrl);
     }
   }
 
@@ -959,6 +985,15 @@ class _WebViewScreenState extends State<WebViewScreen>
             crossAxisAlignment: CrossAxisAlignment.start,
             mainAxisSize: MainAxisSize.min,
             children: [
+              // ── Boot Status ──
+              const Text('🚀 Boot Status', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              _debugRow('Boot step', _bootStep),
+              _debugRow('Initializing', _isInitializing ? '⏳ YES' : '✅ Done'),
+              const Divider(),
+              // ── GAID ──
+              const Text('📱 Device ID (GAID)', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              _debugRow('GAID', _debugGaid),
+              const Divider(),
               // ── AF Status (with organic warning) ──
               const Text('📡 AF Status', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
               _debugRow('af_status', _debugAfStatus == 'Organic'
@@ -974,28 +1009,21 @@ class _WebViewScreenState extends State<WebViewScreen>
               const Divider(),
               // ── Deep Link Params (sub5–sub8) ──
               const Text('🔗 DL Params', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-              _debugRow('sub5 (DL seg 3)', _debugSub5),
-              _debugRow('sub6 (DL seg 4)', _debugSub6),
-              _debugRow('sub7 (DL seg 5)', _debugSub7),
-              _debugRow('sub8 (DL seg 6)', _debugSub8),
+              _debugRow('sub5', _debugSub5),
+              _debugRow('sub6', _debugSub6),
+              _debugRow('sub7', _debugSub7),
+              _debugRow('sub8', _debugSub8),
               const Divider(),
-              // ── Internal IDs ──
-              const Text('🆔 Internal IDs', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-              _debugRow('sub9 (project_id)', _debugSub9),
-              _debugRow('sub10 (af_uid)', _debugSub10),
-              _debugRow('GAID', _debugGaid),
+              // ── System IDs ──
+              const Text('🆔 System IDs', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              _debugRow('sub9 (projectId)', _debugSub9),
+              _debugRow('sub10 (AF UID)', _debugSub10),
+              _debugRow('AF UID status', _afUidStatus),
               const Divider(),
-              // ── Environment Checks ──
-              const Text('⚙️ Environment', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-              _debugRow('Env Project ID', AppConfig.builderProjectId.isEmpty ? '⚠️ MISSING' : AppConfig.builderProjectId),
-              _debugRow('Env AF Dev Key', AppConfig.afDevKey.isEmpty ? '⚠️ MISSING' : '✅ Set'),
-              _debugRow('Env App ID', AppConfig.appId.isEmpty ? '⚠️ MISSING' : AppConfig.appId),
-              const Divider(),
-              // ── SDK State ──
-              const Text('🔧 SDK State', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
-              _debugRow('AF UID', _afUidStatus),
-              _debugRow('Deep Link Status', _deepLinkStatus),
-              _debugRow('Conversion Status', _conversionDataStatus),
+              // ── Callback Status ──
+              const Text('📞 Callbacks', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
+              _debugRow('Deep Link', _deepLinkStatus),
+              _debugRow('Conversion', _conversionDataStatus),
               const Divider(),
               // ── Keitaro URL ──
               const Text('🌐 Final URL', style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold)),
@@ -1035,9 +1063,9 @@ class _WebViewScreenState extends State<WebViewScreen>
         actions: [
           TextButton(
             onPressed: () async {
-              // Manual refresh: re-fetch AF UID + GAID + attribution state
-              final afUid = await _appsFlyerService._sdk?.getAppsFlyerUID();
+              // Manual refresh: re-fetch GAID + AF UID + attribution state
               await _fetchAndSetGaid(forceRefresh: true);
+              final afUid = await _appsFlyerService.getAppsFlyerUID();
               if (mounted) {
                 setState(() {
                   _afUidStatus = afUid ?? _appsFlyerService.uid ?? 'null';
@@ -1108,7 +1136,7 @@ class _WebViewScreenState extends State<WebViewScreen>
 
   void _retryLoading() {
     if (!_deepLinkHandled) {
-      _resolveUrl(AppConfig.gameUrl);
+      _finishBoot(AppConfig.gameUrl);
     } else {
       _controller.reload();
     }
@@ -1175,16 +1203,18 @@ class _WebViewScreenState extends State<WebViewScreen>
         behavior: HitTestBehavior.translucent,
         child: Stack(
           children: [
-            // WebView is always underneath
-            if (_urlResolved)
+            // WebView is always underneath (only when URL resolved AND boot done)
+            if (_urlResolved && !_isInitializing)
               Positioned.fill(
                 child: SafeArea(child: WebViewWidget(controller: _controller)),
               ),
 
-            // Splash overlay — fades out after WebView finishes loading
-            if (!_webViewReady || _fadeOutController.isAnimating)
+            // Splash overlay — shown during init OR fading out after WebView loads
+            if (_isInitializing || !_webViewReady || _fadeOutController.isAnimating)
               FadeTransition(
-                opacity: _fadeOutAnimation,
+                opacity: _isInitializing
+                    ? const AlwaysStoppedAnimation(1.0)
+                    : _fadeOutAnimation,
                 child: _buildSplashScreen(),
               ),
           ],
